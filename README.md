@@ -1,6 +1,6 @@
 # semi-sentient code
 
-Personal site and blog of Ralph Lozano. Astro + MDX, deployed to GitHub Pages by `.github/workflows/deploy.yml` on every push to `main`.
+Personal site and blog of Ralph Lozano. Astro + MDX, served as static assets on Cloudflare Workers. Cloudflare builds (`npm run build`) and deploys (`npx wrangler deploy`, configured in `wrangler.jsonc`) on every push to `main`.
 
 ## Commands
 
@@ -40,6 +40,4 @@ OG images are generated for every post at build time (`/og/<slug>.png`).
 
 ## Domain
 
-Served at https://semisentientcode.com. DNS is on Cloudflare (DNS-only, not proxied):
-apex `A`/`AAAA` records point to GitHub Pages, and `www` is a `CNAME` to `topthishat.github.io`.
-The custom domain is configured in repo Settings → Pages. Deploys use GitHub Actions, so no `CNAME` file is needed.
+Served at https://semisentientcode.com. DNS and hosting are both on Cloudflare; the apex and `www` are attached to the Worker as custom domains (Worker → Settings → Domains & Routes).
