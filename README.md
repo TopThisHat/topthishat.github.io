@@ -15,7 +15,6 @@ Personal site and blog of Ralph Lozano. Astro + MDX, deployed to GitHub Pages by
 
 - `src/site.config.ts` holds name, links, tagline, disclaimer, analytics code, and the site URL. Personal details are only edited here.
 - `src/content/writing/*.mdx` is where posts go. The filename becomes the URL: `/writing/<filename>`.
-- `src/data/work.ts` holds the projects list.
 - `src/pages/about.astro` holds the bio text.
 
 ## Writing a post

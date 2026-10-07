@@ -5,19 +5,19 @@ export const SITE = {
   name: 'Ralph Lozano',
   blogName: 'Semi-Sentient Code',
   wordmark: 'semi-sentient code',
-  role: 'ML & AI engineering leader in financial services',
+  role: 'Principal ML Engineer · NLP & GenAI in financial services',
   tagline:
-    'I build production machine learning and LLM systems, and write about what actually holds up once they meet real users.',
+    'I’ve spent ten years shipping NLP and GenAI systems at banks: agents, retrieval, and the pipelines underneath them. I write about what holds up in production.',
   description:
     'Writing on AI engineering, LLM systems, and production machine learning by Ralph Lozano.',
   disclaimer: 'Views are my own and do not represent my employer.',
   links: {
     github: 'https://github.com/TopThisHat',
-    linkedin: 'https://www.linkedin.com/in/REPLACE_ME',
+    linkedin: 'https://www.linkedin.com/in/ralphlozano',
     // Set to '' to hide.
     social: { label: 'Bluesky', url: '' },
     email: '', // e.g. 'hello@semisentientcode.com'
-    // Drop the file in public/ and set to '/resume.pdf'. '' hides the link.
+    // Drop a PDF in public/ and set to '/resume.pdf'. '' hides the link.
     resume: '',
   },
   // GoatCounter site code, e.g. 'semisentientcode'. '' disables analytics.
