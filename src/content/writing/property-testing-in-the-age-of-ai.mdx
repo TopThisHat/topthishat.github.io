@@ -118,7 +118,7 @@ E           items=['0', ''],
 E       )
 ```
 
-Look at what it handed back. Not a forty-element list of Unicode noise, but `['0', '']`: two strings, the shortest it could find, in an order the function doesn't keep. Hypothesis found a failing input and then shrank it, trying smaller and simpler inputs until it reached the minimal case that still breaks. That shrunk example is the whole pitch. It's the bug report you wish your users wrote, and it's the reproduction I'd hand straight back to an agent.
+The failing input is `['0', '']`: two short strings that the function returns in the wrong order. Hypothesis found a failure, then shrank it, trying smaller and simpler inputs until it reached the smallest case that still fails. That minimal example is what makes property tests practical to debug. It's an exact reproduction, and it's what I hand back to the agent to fix.
 
 The fix is one line, `list(dict.fromkeys(items))`. More importantly, once the three properties exist, I never have to think about this function again. Any future rewrite, by me or by an agent, has to satisfy them.
 
