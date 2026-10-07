@@ -5,11 +5,11 @@ export const SITE = {
   name: 'Ralph Lozano',
   blogName: 'Semi-Sentient Code',
   wordmark: 'semi-sentient code',
-  role: 'Principal ML Engineer · NLP & GenAI in financial services',
+  role: 'Principal ML Engineer',
   tagline:
-    'I’ve spent ten years shipping NLP and GenAI systems at banks: agents, retrieval, and the pipelines underneath them. I write about what holds up in production.',
+    'I’m a machine learning engineer in financial services. I write about building software with AI, and dig into the code, papers, and algorithms underneath it.',
   description:
-    'Writing on AI engineering, LLM systems, and production machine learning by Ralph Lozano.',
+    'Ralph Lozano on building software with AI, and the code, papers, and algorithms underneath it.',
   disclaimer: 'Views are my own and do not represent my employer.',
   links: {
     github: 'https://github.com/TopThisHat',
