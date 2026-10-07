@@ -3,7 +3,7 @@ title: How I Trust Code I Didn't Write
 description: Property testing in the age of AI. Agent-written tests agree with agent-written code; properties, mutation testing, and stateful models are how I get the signal back.
 pubDate: 2026-10-07
 tags: [testing, ai-engineering, python]
-draft: true
+draft: false
 ---
 A while ago I built a small toy project for running agents on [Temporal](https://temporal.io/) and wrote about it on my old Substack. It's a deep-research agent whose workflow fans a question out to planning, research, validation and critique agents, then stitches the answers back together. A lot has changed since then, especially the quality of coding harnesses and frontier models.
 
@@ -404,7 +404,7 @@ class PlanMachine(RuleBasedStateMachine):
 TestPlanMachine = PlanMachine.TestCase
 ```
 
-Twenty-five lines. Two operations, three invariants. Hypothesis will add tasks with random dependency graphs, complete them in random valid orders, and after every single step confirm that "ready" tasks are a subset of "pending" ones, that nothing is ready while its dependencies are open, and that the percentage hits 100 exactly when nothing is left. If it ever finds a sequence that breaks one, it shrinks that too: down to the shortest sequence of operations that reproduces it.
+About forty lines. Two operations, three invariants. Hypothesis will add tasks with random dependency graphs, complete them in random valid orders, and after every single step confirm that "ready" tasks are a subset of "pending" ones, that nothing is ready while its dependencies are open, and that the percentage hits 100 exactly when nothing is left. If it ever finds a sequence that breaks one, it shrinks that too: down to the shortest sequence of operations that reproduces it.
 
 This one passes. The point isn't the catch; it's that I now have a precise, executable statement of what a research plan *is*, written in about the time it takes to write three example tests, and it'll outlive every reimplementation.
 
@@ -437,4 +437,4 @@ That's the real claim of this post. Property tests, mutation scores, and statefu
 
 ---
 
-The code in this post is real and lives in [the repo](https://github.com/TopThisHat/pydanticai-temporal-example): `tests/test_properties.py`, `tests/test_plan_state_machine.py` and `tests/test_calculate_fuzz.py`, with `make mutate` to reproduce the table. The planted bug is not committed; everything else is.
+The code in this post is real and lives in [the repo](https://github.com/TopThisHat/pydanticai-temporal-example/tree/ccr-374c1324-sqkbjh): `tests/test_properties.py`, `tests/test_plan_state_machine.py` and `tests/test_calculate_fuzz.py`, with `make mutate` to reproduce the table. The planted bug is not committed; everything else is.
