@@ -38,8 +38,8 @@ Components available in every post without importing them:
 
 OG images are generated for every post at build time (`/og/<slug>.png`).
 
-## Switching to semisentientcode.com
+## Domain
 
-1. Set `url` in `src/site.config.ts` to `https://semisentientcode.com`.
-2. Add `public/CNAME` containing `semisentientcode.com`.
-3. Configure DNS (apex `A` records to GitHub Pages IPs, or `CNAME www` to `topthishat.github.io`) and set the custom domain under repo Settings → Pages.
+Served at https://semisentientcode.com. DNS is on Cloudflare (DNS-only, not proxied):
+apex `A`/`AAAA` records point to GitHub Pages, and `www` is a `CNAME` to `topthishat.github.io`.
+The custom domain is configured in repo Settings → Pages. Deploys use GitHub Actions, so no `CNAME` file is needed.

@@ -1,7 +1,7 @@
 // Everything personal lives here. Edit this file, not the templates.
 export const SITE = {
-  // Swap to 'https://semisentientcode.com' when the domain moves (and add public/CNAME).
-  url: 'https://topthishat.github.io',
+  // Canonical URL. The custom domain itself is set in repo Settings → Pages.
+  url: 'https://semisentientcode.com',
   name: 'Ralph Lozano',
   blogName: 'Semi-Sentient Code',
   wordmark: 'semi-sentient code',
