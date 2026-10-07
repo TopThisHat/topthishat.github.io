@@ -1,0 +1,44 @@
+---
+import { SITE } from '../site.config';
+
+const { links } = SITE;
+const items = [
+  { label: 'github', url: links.github },
+  { label: 'linkedin', url: links.linkedin },
+  { label: links.social.label.toLowerCase(), url: links.social.url },
+  { label: 'rss', url: '/rss.xml' },
+].filter((l) => l.url);
+---
+
+<footer class="container">
+  <nav aria-label="Elsewhere">
+    {items.map(({ label, url }) => <a href={url}>{label}</a>)}
+  </nav>
+  <p>© {new Date().getFullYear()} {SITE.name}. {SITE.disclaimer}</p>
+</footer>
+
+<style>
+  footer {
+    margin-top: 6rem;
+    padding-block: 2rem 3rem;
+    border-top: 1px solid var(--rule);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+
+  nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.25rem;
+    margin-bottom: 1rem;
+  }
+
+  a {
+    text-decoration: none;
+  }
+
+  p {
+    margin: 0;
+  }
+</style>

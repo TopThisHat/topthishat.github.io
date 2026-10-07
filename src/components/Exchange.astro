@@ -1,0 +1,45 @@
+---
+// A model conversation. Wrap <Turn> elements:
+//   <Exchange model="claude-opus-5-5" caption="...">
+//     <Turn role="user">...</Turn>
+//     <Turn role="assistant">...</Turn>
+//   </Exchange>
+interface Props {
+  model?: string;
+  caption?: string;
+}
+
+const { model, caption } = Astro.props;
+---
+
+<figure class="exchange">
+  {model && <div class="model">model: {model}</div>}
+  <div class="turns"><slot /></div>
+  {caption && <figcaption>{caption}</figcaption>}
+</figure>
+
+<style>
+  .exchange {
+    margin: 2rem 0;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    background: var(--surface);
+    overflow: hidden;
+  }
+
+  .model {
+    padding: 0.5rem 1.1rem;
+    border-bottom: 1px solid var(--rule);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+
+  figcaption {
+    padding: 0.6rem 1.1rem;
+    border-top: 1px solid var(--rule);
+    font-size: 0.9rem;
+    font-style: italic;
+    color: var(--muted);
+  }
+</style>

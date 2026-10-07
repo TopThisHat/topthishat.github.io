@@ -1,0 +1,22 @@
+---
+import Base from '../../layouts/Base.astro';
+import PostList from '../../components/PostList.astro';
+import { SITE } from '../../site.config';
+import { getPosts } from '../../lib/posts';
+
+const posts = await getPosts();
+---
+
+<Base title="Writing" description={`Everything published on ${SITE.blogName}.`}>
+  <h1>Writing</h1>
+  <p class="meta">
+    {posts.length} {posts.length === 1 ? 'post' : 'posts'} · <a href="/rss.xml">rss</a>
+  </p>
+  <div class="list"><PostList posts={posts} /></div>
+</Base>
+
+<style>
+  .list {
+    margin-top: 2.5rem;
+  }
+</style>

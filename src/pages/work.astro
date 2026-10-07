@@ -1,0 +1,16 @@
+---
+import Base from '../layouts/Base.astro';
+import WorkList from '../components/WorkList.astro';
+---
+
+<Base title="Work" description="Projects, systems, and experiments.">
+  <h1>Work</h1>
+  <p class="meta">Projects, systems, and experiments.</p>
+  <div class="list"><WorkList /></div>
+</Base>
+
+<style>
+  .list {
+    margin-top: 2.5rem;
+  }
+</style>

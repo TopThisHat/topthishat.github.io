@@ -1,0 +1,55 @@
+---
+interface Props {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+}
+
+const { role } = Astro.props;
+---
+
+<div class:list={['turn', role]}>
+  <div class="role">{role}</div>
+  <div class="body"><slot /></div>
+</div>
+
+<style>
+  .turn {
+    display: grid;
+    grid-template-columns: 5.5rem 1fr;
+    gap: 1rem;
+    padding: 0.9rem 1.1rem;
+    font-size: 1rem;
+  }
+
+  .turn + .turn {
+    border-top: 1px dashed var(--rule);
+  }
+
+  .role {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--muted);
+    padding-top: 0.25rem;
+  }
+
+  .assistant .role {
+    color: var(--accent);
+  }
+
+  .system .body,
+  .tool .body {
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    color: var(--muted);
+  }
+
+  .body :global(> :last-child) {
+    margin-bottom: 0;
+  }
+
+  @media (max-width: 30rem) {
+    .turn {
+      grid-template-columns: 1fr;
+      gap: 0.25rem;
+    }
+  }
+</style>

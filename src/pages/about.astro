@@ -1,0 +1,69 @@
+---
+import Base from '../layouts/Base.astro';
+import { SITE } from '../site.config';
+
+const { links } = SITE;
+const contact = [
+  { label: 'github', url: links.github, text: links.github.replace('https://', '') },
+  { label: 'linkedin', url: links.linkedin, text: 'linkedin' },
+  { label: links.social.label.toLowerCase(), url: links.social.url, text: links.social.url.replace('https://', '') },
+  { label: 'email', url: links.email && `mailto:${links.email}`, text: links.email },
+  { label: 'résumé', url: links.resume, text: 'pdf' },
+].filter((c) => c.url);
+---
+
+<Base title="About" description={`About ${SITE.name}.`}>
+  <h1>About</h1>
+  <p class="meta">{SITE.role}</p>
+
+  <div class="prose">
+    <!-- Placeholder bio. Rewrite in your own voice. -->
+    <p>
+      I lead machine learning and AI engineering teams, focused on taking LLM systems from promising demo to
+      something that runs reliably at scale, with real users and real constraints.
+    </p>
+    <p>
+      <em>{SITE.blogName}</em> is where I write about that work: what holds up in production, what quietly
+      breaks, and the engineering in between.
+    </p>
+  </div>
+
+  <h2 class="section-label">elsewhere</h2>
+  <dl>
+    {
+      contact.map(({ label, url, text }) => (
+        <>
+          <dt>{label}</dt>
+          <dd>
+            <a href={url}>{text}</a>
+          </dd>
+        </>
+      ))
+    }
+  </dl>
+
+  <p class="disclaimer meta">{SITE.disclaimer}</p>
+</Base>
+
+<style>
+  dl {
+    display: grid;
+    grid-template-columns: 6.5rem 1fr;
+    gap: 0.5rem 1rem;
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+  }
+
+  dt {
+    color: var(--muted);
+  }
+
+  dd {
+    margin: 0;
+  }
+
+  .disclaimer {
+    margin-top: 3rem;
+  }
+</style>
