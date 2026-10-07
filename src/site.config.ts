@@ -21,5 +21,5 @@ export const SITE = {
     resume: '',
   },
   // GoatCounter site code, e.g. 'semisentientcode'. '' disables analytics.
-  goatcounter: '',
+  goatcounter: 'semisentientcode',
 } as const;
