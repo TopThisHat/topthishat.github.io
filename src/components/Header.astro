@@ -2,8 +2,8 @@
 import { SITE } from '../site.config';
 
 const nav = [
-  { href: '/writing', label: 'writing' },
-  { href: '/about', label: 'about' },
+  { href: '/writing/', label: 'writing' },
+  { href: '/about/', label: 'about' },
 ];
 const path = Astro.url.pathname.replace(/\/$/, '') || '/';
 ---
@@ -15,7 +15,7 @@ const path = Astro.url.pathname.replace(/\/$/, '') || '/';
   <nav aria-label="Main">
     {
       nav.map(({ href, label }) => (
-        <a href={href} aria-current={path.startsWith(href) ? 'page' : undefined}>
+        <a href={href} aria-current={`${path}/`.startsWith(href) ? 'page' : undefined}>
           {label}
         </a>
       ))

@@ -8,7 +8,7 @@ import { transformerTitle } from './src/lib/shiki.ts';
 
 export default defineConfig({
   site: SITE.url,
-  trailingSlash: 'ignore',
+  trailingSlash: 'always',
   integrations: [mdx(), sitemap()],
   markdown: {
     shikiConfig: {
