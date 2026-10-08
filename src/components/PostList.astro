@@ -1,6 +1,6 @@
 ---
 import type { CollectionEntry } from 'astro:content';
-import { formatDate } from '../lib/posts';
+import { formatDate, titleTransition } from '../lib/posts';
 
 interface Props {
   posts: CollectionEntry<'writing'>[];
@@ -17,7 +17,7 @@ const { posts } = Astro.props;
           {formatDate(post.data.pubDate)}
         </time>
         <div>
-          <a href={`/writing/${post.id}/`}>{post.data.title}</a>
+          <a href={`/writing/${post.id}/`} style={titleTransition(post.id)}>{post.data.title}</a>
           {post.data.description && <p class="desc">{post.data.description}</p>}
         </div>
       </li>

@@ -17,6 +17,18 @@
   color-scheme: light dark;
 }
 
+/* Cross-document page transitions: a short fade, and post titles carry over from lists. */
+@media (prefers-reduced-motion: no-preference) {
+  @view-transition {
+    navigation: auto;
+  }
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 180ms;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #0e100e;
@@ -50,6 +62,7 @@ body {
   font-size: 1.1875rem;
   line-height: 1.6;
   font-optical-sizing: auto;
+  font-variant-numeric: oldstyle-nums proportional-nums;
 }
 
 ::selection {
@@ -67,6 +80,7 @@ h2,
 h3,
 h4 {
   font-family: var(--font-mono);
+  font-variant-numeric: normal;
   font-weight: 600;
   letter-spacing: -0.02em;
   line-height: 1.25;
@@ -124,8 +138,11 @@ img {
 }
 
 .mono,
-.meta {
+.meta,
+code,
+pre {
   font-family: var(--font-mono);
+  font-variant-numeric: normal;
 }
 
 .meta {
@@ -218,6 +235,14 @@ img {
   margin-bottom: 0.35rem;
 }
 
+/* Let list numbers and bullets hang in the margin when there is room for them. */
+@media (min-width: 48rem) {
+  .prose ul,
+  .prose ol {
+    padding-left: 0;
+  }
+}
+
 .prose li::marker {
   color: var(--muted);
   font-family: var(--font-mono);
@@ -244,6 +269,7 @@ img {
 
 .prose table {
   width: 100%;
+  font-variant-numeric: lining-nums tabular-nums;
   border-collapse: collapse;
   font-size: 0.95rem;
   margin: 1.5rem 0;
@@ -283,6 +309,44 @@ img {
   font-size: 0.8rem;
   margin-top: 0;
   color: var(--muted);
+}
+
+.sidenote {
+  display: none;
+}
+
+@media (min-width: 78rem) {
+  .sidenote {
+    display: block;
+    float: right;
+    clear: right;
+    width: 13rem;
+    margin: 0.3rem -16rem 1rem 0;
+    font-size: 0.85rem;
+    line-height: 1.45;
+    color: var(--muted);
+    hyphens: none;
+  }
+
+  .sidenote-num {
+    font-family: var(--font-mono);
+    font-size: 0.8em;
+    color: var(--accent);
+  }
+
+  .sidenote.flash {
+    animation: flash 1.2s ease-out;
+  }
+
+  .prose .footnotes {
+    display: none;
+  }
+}
+
+@keyframes flash {
+  from {
+    color: var(--fg);
+  }
 }
 
 /* ---------- Code ---------- */

@@ -46,7 +46,11 @@ export async function renderOg({ title, subtitle }: { title: string; subtitle?: 
     h(
       'div',
       { display: 'flex', flexDirection: 'column' },
-      h('div', { fontSize: title.length > 60 ? 54 : 66, fontWeight: 700, lineHeight: 1.15, letterSpacing: -1.5 }, title),
+      h(
+        'div',
+        { fontSize: title.length > 60 ? 54 : 66, fontWeight: 700, lineHeight: 1.15, letterSpacing: -1.5, textWrap: 'balance' },
+        title,
+      ),
       ...(subtitle
         ? [h('div', { marginTop: 28, fontFamily: 'Newsreader', fontSize: 32, color: C.muted, lineHeight: 1.4 }, subtitle)]
         : []),

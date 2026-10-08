@@ -5,6 +5,8 @@ pubDate: 2026-10-07
 tags: [testing, ai-engineering, python]
 draft: false
 ---
+import LayersDiagram from '../../components/LayersDiagram.astro';
+
 A while ago I built a small toy project for running agents on [Temporal](https://temporal.io/) and wrote about it on my old Substack. It's a deep-research agent whose workflow fans a question out to planning, research, validation and critique agents, then stitches the answers back together. A lot has changed since then, especially the quality of coding harnesses and frontier models.
 
 When I wrote that post, I was still deep in the code. I spent hours reviewing it, and built systems to refactor it and condense what I'd learned. I don't work that way anymore. I still read code, but far less of it line by line, because with AI development moving this fast there's simply too much to keep up with. I've found myself caring less about how the code works and more about two questions: does it do what I need, and will this change break something I didn't expect?
@@ -25,6 +27,8 @@ When I review AI-written code I think in layers, bottom to top:
 4. **Mutation testing.** Deliberately break the code and check the tests notice.
 5. **Stateful tests.** Random sequences of operations against invariants.
 6. **Human review.** Me, reading.
+
+<LayersDiagram />
 
 Layer 2 used to be the backbone because it's the easiest to write. Write a few tests, validate the happy path. If I'm clever, I'll think of a few unhappy paths too, and over time the suite accumulates the edge cases I missed the first time around. A lot of companies gate merges on these tests, usually through a coverage number. Whether that improves code quality or just adds toil is an open question.
 

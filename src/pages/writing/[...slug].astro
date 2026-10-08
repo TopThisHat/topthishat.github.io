@@ -5,7 +5,7 @@ import Exchange from '../../components/Exchange.astro';
 import Turn from '../../components/Turn.astro';
 import Figure from '../../components/Figure.astro';
 import { SITE } from '../../site.config';
-import { getPosts, formatDate, readingTime } from '../../lib/posts';
+import { getPosts, formatDate, readingTime, titleTransition } from '../../lib/posts';
 
 export async function getStaticPaths() {
   const posts = await getPosts();
@@ -37,7 +37,7 @@ const reply = [
 
   <article>
     <header>
-      <h1>{title}</h1>
+      <h1 style={titleTransition(post.id)}>{title}</h1>
       <p class="meta">
         <time datetime={pubDate.toISOString()}>{formatDate(pubDate, 'long')}</time>
         {updatedDate && <span> · updated {formatDate(updatedDate, 'long')}</span>}
@@ -59,6 +59,23 @@ const reply = [
             ))}
           </ol>
         </details>
+      )
+    }
+
+    {
+      sections.length >= 4 && (
+        <nav class="toc-side" aria-label="Contents">
+          <div class="toc-side-inner">
+            <p class="meta">contents</p>
+            <ol>
+              {sections.map((h) => (
+                <li>
+                  <a href={`#${h.slug}`}>{h.text}</a>
+                </li>
+              ))}
+            </ol>
+          </div>
+        </nav>
       )
     }
 
@@ -130,6 +147,49 @@ const reply = [
     wrap.append(table);
   }
 
+  // Highlight the section being read in the side contents list (wide screens only).
+  const sideLinks = [...document.querySelectorAll<HTMLAnchorElement>('.toc-side a')];
+  const sectionHeadings = sideLinks
+    .map((a) => document.getElementById(decodeURIComponent(a.hash.slice(1))))
+    .filter((h): h is HTMLElement => h !== null);
+  if (sideLinks.length > 0) {
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      let current = -1;
+      sectionHeadings.forEach((h, i) => {
+        if (h.getBoundingClientRect().top < innerHeight * 0.3) current = i;
+      });
+      sideLinks.forEach((a, i) => a.toggleAttribute('aria-current', i === current));
+    };
+    addEventListener('scroll', () => (frame ||= requestAnimationFrame(update)), { passive: true });
+    update();
+  }
+
+  // Copy each footnote into a margin note beside its reference. CSS shows these and hides the
+  // footnote list only on screens wide enough to have a margin.
+  const wide = matchMedia('(min-width: 78rem)');
+  for (const ref of document.querySelectorAll<HTMLAnchorElement>('.prose a[data-footnote-ref]')) {
+    const note = document.getElementById(decodeURIComponent(ref.hash.slice(1)));
+    if (!note) continue;
+    const content = note.cloneNode(true) as HTMLElement;
+    content.querySelectorAll('[data-footnote-backref]').forEach((a) => a.remove());
+    const side = document.createElement('span');
+    side.className = 'sidenote';
+    side.id = `side-${note.id}`;
+    side.innerHTML =
+      `<span class="sidenote-num">${ref.textContent}</span> ` +
+      [...content.querySelectorAll('p')].map((p) => p.innerHTML.trim()).join('<br>');
+    (ref.closest('sup') ?? ref).after(side);
+    ref.addEventListener('click', (e) => {
+      if (!wide.matches) return;
+      e.preventDefault();
+      side.classList.remove('flash');
+      void side.offsetWidth;
+      side.classList.add('flash');
+    });
+  }
+
   const status = document.getElementById('copy-status');
 
   for (const pre of document.querySelectorAll<HTMLPreElement>('.prose pre')) {
@@ -158,6 +218,10 @@ const reply = [
 </script>
 
 <style>
+  article {
+    position: relative;
+  }
+
   header {
     margin-bottom: 2.5rem;
   }
@@ -203,6 +267,66 @@ const reply = [
 
   .toc a {
     text-decoration: none;
+  }
+
+  .toc-side {
+    display: none;
+  }
+
+  /* With room in the margins: contents on the left, footnotes as sidenotes on the right. */
+  @media (min-width: 78rem) {
+    .toc {
+      display: none;
+    }
+
+    .toc-side {
+      display: block;
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      right: calc(100% + 3rem);
+      width: 13rem;
+    }
+
+    .toc-side-inner {
+      position: sticky;
+      top: 2rem;
+      max-height: calc(100vh - 4rem);
+      overflow-y: auto;
+    }
+
+    .toc-side p {
+      margin: 0 0 0.75rem;
+    }
+
+    .toc-side ol {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      font-size: 0.95rem;
+      line-height: 1.35;
+    }
+
+    .toc-side li {
+      padding-block: 0.3rem;
+    }
+
+    .toc-side a {
+      display: block;
+      padding-left: 0.75rem;
+      border-left: 1px solid var(--rule);
+      color: var(--muted);
+      text-decoration: none;
+    }
+
+    .toc-side a:hover {
+      color: var(--fg);
+    }
+
+    .toc-side a[aria-current] {
+      color: var(--fg);
+      border-left-color: var(--accent);
+    }
   }
 
   .after {
