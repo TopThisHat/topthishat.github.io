@@ -4,16 +4,29 @@ import Base from '../../layouts/Base.astro';
 import Exchange from '../../components/Exchange.astro';
 import Turn from '../../components/Turn.astro';
 import Figure from '../../components/Figure.astro';
+import { SITE } from '../../site.config';
 import { getPosts, formatDate, readingTime } from '../../lib/posts';
 
 export async function getStaticPaths() {
   const posts = await getPosts();
-  return posts.map((post) => ({ params: { slug: post.id }, props: { post } }));
+  // Posts are sorted newest first, so the next-newer post is at i - 1.
+  return posts.map((post, i) => ({
+    params: { slug: post.id },
+    props: { post, newer: posts[i - 1], older: posts[i + 1] },
+  }));
 }
 
-const { post } = Astro.props;
-const { Content } = await render(post);
+const { post, newer, older } = Astro.props;
+const { Content, headings } = await render(post);
 const { title, description, pubDate, updatedDate, tags, draft } = post.data;
+const sections = headings.filter((h) => h.depth === 2);
+const { links } = SITE;
+const reply = [
+  { label: 'email', url: links.email && `mailto:${links.email}` },
+  { label: links.social.label.toLowerCase(), url: links.social.url },
+  { label: 'linkedin', url: links.linkedin },
+  { label: 'github', url: links.github },
+].filter((l) => l.url);
 ---
 
 <Base title={title} description={description} ogImage={`/og/${post.id}.png`} type="article">
@@ -31,18 +44,94 @@ const { title, description, pubDate, updatedDate, tags, draft } = post.data;
         <span> · {readingTime(post.body)} min read</span>
         {draft && <span class="draft"> · draft</span>}
       </p>
-      {tags.length > 0 && <p class="meta tags">{tags.map((t) => `#${t}`).join('  ')}</p>}
+      {tags.length > 0 && <p class="meta tags">tagged {tags.join(' · ')}</p>}
     </header>
+
+    {
+      sections.length >= 4 && (
+        <details class="toc" open>
+          <summary class="meta">contents ({sections.length} sections)</summary>
+          <ol>
+            {sections.map((h) => (
+              <li>
+                <a href={`#${h.slug}`}>{h.text}</a>
+              </li>
+            ))}
+          </ol>
+        </details>
+      )
+    }
 
     <div class="prose">
       <Content components={{ Exchange, Turn, Figure }} />
     </div>
   </article>
 
-  <p class="back meta"><a href="/writing/">← all writing</a></p>
+  <aside class="after" aria-label="After this post">
+    <h2 class="section-label">follow</h2>
+    <p>
+      New posts go out on the <a href="/rss.xml">RSS feed</a>.{' '}
+      {
+        reply.length > 0 && (
+          <>
+            For questions or corrections, reach me on{' '}
+            {reply.map((l, i) => (
+              <>
+                {i > 0 && (i === reply.length - 1 ? ' or ' : ', ')}
+                <a href={l.url}>{l.label}</a>
+              </>
+            ))}
+            .
+          </>
+        )
+      }
+    </p>
+  </aside>
+
+  <nav class="pager meta" aria-label="More writing">
+    {
+      older && (
+        <a class="older" href={`/writing/${older.id}/`}>
+          <span>← older</span>
+          {older.data.title}
+        </a>
+      )
+    }
+    {
+      newer && (
+        <a class="newer" href={`/writing/${newer.id}/`}>
+          <span>newer →</span>
+          {newer.data.title}
+        </a>
+      )
+    }
+    <a class="all" href="/writing/">← all writing</a>
+  </nav>
+  <p class="sr-only" role="status" id="copy-status"></p>
 </Base>
 
 <script>
+  // The contents list renders open; collapse it on narrow screens so the intro stays near the top.
+  if (matchMedia('(max-width: 40rem)').matches) document.querySelector('.toc')?.removeAttribute('open');
+
+  for (const h of document.querySelectorAll<HTMLHeadingElement>('.prose h2[id], .prose h3[id]')) {
+    const a = document.createElement('a');
+    a.className = 'heading-anchor';
+    a.href = `#${h.id}`;
+    a.textContent = '#';
+    a.setAttribute('aria-label', `Link to section: ${h.textContent}`);
+    h.append(a);
+  }
+
+  for (const table of document.querySelectorAll<HTMLTableElement>('.prose table')) {
+    const wrap = document.createElement('div');
+    wrap.className = 'table-wrap';
+    table.replaceWith(wrap);
+    wrap.append(table);
+  }
+
+  const status = document.getElementById('copy-status');
+
   for (const pre of document.querySelectorAll<HTMLPreElement>('.prose pre')) {
     const wrap = document.createElement('div');
     wrap.className = 'code-wrap';
@@ -53,9 +142,15 @@ const { title, description, pubDate, updatedDate, tags, draft } = post.data;
     btn.className = 'copy-btn';
     btn.type = 'button';
     btn.textContent = 'copy';
+    btn.setAttribute('aria-label', 'Copy code');
     btn.addEventListener('click', async () => {
-      await navigator.clipboard.writeText(pre.querySelector('code')?.innerText ?? '');
-      btn.textContent = 'copied';
+      try {
+        await navigator.clipboard.writeText(pre.querySelector('code')?.innerText ?? '');
+        btn.textContent = 'copied';
+      } catch {
+        btn.textContent = 'copy failed';
+      }
+      if (status) status.textContent = btn.textContent === 'copied' ? 'Code copied' : 'Copy failed';
       setTimeout(() => (btn.textContent = 'copy'), 1500);
     });
     wrap.append(btn);
@@ -68,23 +163,117 @@ const { title, description, pubDate, updatedDate, tags, draft } = post.data;
   }
 
   h1 {
-    font-size: 2rem;
+    font-size: 2.25rem;
   }
 
   .tags {
     margin-top: -0.75rem;
-    word-spacing: 0.4em;
+  }
+
+  .toc {
+    margin: -0.5rem 0 2.5rem;
+    padding-block: 0.25rem;
+    border-block: 1px solid var(--rule);
+  }
+
+  .toc summary {
+    padding-block: 0.6rem;
+    cursor: pointer;
+  }
+
+  .toc summary:hover {
+    color: var(--fg);
+  }
+
+  .toc ol {
+    margin: 0 0 0.75rem;
+    padding-left: 1.5rem;
+    font-size: 1rem;
+  }
+
+  .toc li {
+    padding-block: 0.2rem;
+  }
+
+  .toc li::marker {
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 0.8em;
+  }
+
+  .toc a {
+    text-decoration: none;
+  }
+
+  .after {
+    margin-top: 4rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--rule);
+  }
+
+  .after .section-label {
+    margin-top: 1.5rem;
+  }
+
+  .after p {
+    font-size: 1.05rem;
+  }
+
+  .pager {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem 1.5rem;
+    margin-top: 2.5rem;
+  }
+
+  .pager a {
+    display: block;
+    padding-block: 0.6rem;
+    text-decoration: none;
+    color: var(--fg);
+    font-family: var(--font-serif);
+    font-size: 1.05rem;
+  }
+
+  .pager span {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+
+  .pager .newer {
+    grid-column: 2;
+    text-align: right;
+  }
+
+  .pager .all {
+    grid-column: 1 / -1;
+    padding-block: 0.75rem;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+
+  .pager a:hover,
+  .pager a:hover span {
+    color: var(--accent);
+  }
+
+  @media (max-width: 30rem) {
+    .pager {
+      grid-template-columns: 1fr;
+    }
+
+    .pager .newer {
+      grid-column: 1;
+      grid-row: 1;
+      text-align: left;
+    }
   }
 
   .draft {
     color: var(--accent);
   }
 
-  .back {
-    margin-top: 4rem;
-  }
-
-  .back a {
-    text-decoration: none;
-  }
 </style>

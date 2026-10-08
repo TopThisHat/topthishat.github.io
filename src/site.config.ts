@@ -7,7 +7,7 @@ export const SITE = {
   wordmark: 'semi-sentient code',
   role: 'Principal ML Engineer',
   tagline:
-    'I’m a machine learning engineer in financial services. I write about building software with AI, and dig into the code, papers, and algorithms underneath it.',
+    'I build machine learning systems in financial services. I write about building software with AI, and dig into the code, papers, and algorithms underneath it.',
   description:
     'Ralph Lozano on building software with AI, and the code, papers, and algorithms underneath it.',
   disclaimer: 'Views are my own and do not represent my employer.',
@@ -16,7 +16,7 @@ export const SITE = {
     linkedin: 'https://www.linkedin.com/in/ralphlozano',
     // Set to '' to hide.
     social: { label: 'Bluesky', url: '' },
-    email: '', // e.g. 'hello@semisentientcode.com'
+    email: 'ralph@semisentientcode.com',
     // Drop a PDF in public/ and set to '/resume.pdf'. '' hides the link.
     resume: '',
   },

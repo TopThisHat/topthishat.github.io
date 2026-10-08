@@ -35,7 +35,10 @@ const path = Astro.url.pathname.replace(/\/$/, '') || '/';
     font-size: 0.875rem;
   }
 
+  /* Pad links to a 44px tap target without changing the visual layout. */
   a {
+    padding-block: 0.75rem;
+    margin-block: -0.75rem;
     text-decoration: none;
   }
 
@@ -63,10 +66,12 @@ const path = Astro.url.pathname.replace(/\/$/, '') || '/';
 
   nav {
     display: flex;
-    gap: 1.25rem;
+    gap: 0.75rem;
+    margin-right: -0.25rem;
   }
 
   nav a {
+    padding-inline: 0.25rem;
     color: var(--muted);
   }
 

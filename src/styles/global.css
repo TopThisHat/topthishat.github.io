@@ -79,13 +79,13 @@ h1 {
 }
 
 h2 {
-  font-size: 1.2rem;
-  margin: 2.75rem 0 0.75rem;
+  font-size: 1.5rem;
+  margin: 3.25rem 0 0.85rem;
 }
 
 h3 {
-  font-size: 1.05rem;
-  margin: 2rem 0 0.5rem;
+  font-size: 1.2rem;
+  margin: 2.5rem 0 0.6rem;
 }
 
 p {
@@ -158,15 +158,46 @@ img {
   white-space: nowrap;
 }
 
-/* ---------- Prose ---------- */
-
-.prose {
-  hyphens: auto;
+.skip-link:focus {
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 10;
+  width: auto;
+  height: auto;
+  clip: auto;
+  padding: 0.5rem 0.9rem;
+  font: 500 0.875rem var(--font-mono);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
 }
+
+/* ---------- Prose ---------- */
 
 .prose h2,
 .prose h3 {
-  hyphens: none;
+  scroll-margin-top: 1.5rem;
+}
+
+.heading-anchor {
+  margin-left: 0.4em;
+  color: var(--accent);
+  font-weight: 400;
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity 120ms;
+}
+
+.prose h2:hover .heading-anchor,
+.prose h3:hover .heading-anchor,
+.heading-anchor:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .heading-anchor {
+    opacity: 0.5;
+  }
 }
 
 .prose blockquote {
@@ -200,6 +231,15 @@ img {
   background: var(--surface);
   border: 1px solid var(--rule);
   border-radius: 4px;
+}
+
+.table-wrap {
+  margin: 1.5rem 0;
+  overflow-x: auto;
+}
+
+.table-wrap table {
+  margin: 0;
 }
 
 .prose table {
