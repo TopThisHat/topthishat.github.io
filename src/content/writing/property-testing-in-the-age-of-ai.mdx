@@ -425,15 +425,17 @@ Three hundred random strings, including ones that look like Python, and it never
 
 ## What this changes about working with an agent
 
-Here's the loop I actually run now.
+My loop still starts with defining the feature. What's changed is that I also define the properties I want the code to have. As part of its development loop, the agent doesn't just write unit tests. It writes property tests, mutation tests and fuzz tests too. I review those tests and add any behaviors I care about that it missed.
 
-I describe the feature. The agent writes the code and some example tests. I don't read the example tests closely; I treat them as smoke. Then I write the properties, or increasingly I ask the agent to propose properties and I edit them, which is a better use of my time than reading every function. Properties are short, they're about the problem rather than the solution, and a wrong one is obvious in a way a wrong example rarely is.
+None of this is a silver bullet. The point of layering these defenses is to mark the parts of the codebase that matter most, so that when a PR comes in I can check whether those hotspots changed. If Pydantic validations are changing, or a property test was edited, I know something core to the system is being modified, and I ask why.
 
-Then I run the mutation score, because the properties can be too loose and the tool will tell me where.
+The reality is that I can't review a thousand lines of code a day. I can check two or three signals that tell me whether a change is additive or whether it touches core logic.
 
-What I've noticed is that the agent gets better at the code when the properties exist first. "Make `all_sources` satisfy these four invariants" is a better prompt than "aggregate the unique sources." It's an executable spec. When the agent gets it wrong, the shrunk counterexample goes straight into the next prompt, which gives a tighter feedback loop than reviewing the code myself.
+So far this has worked. I've caught a change that bumped a schema to a version my consumers couldn't handle. I've caught contracts changing, and an execution engine that suddenly produced side effects it shouldn't have.
 
-That's the main point of this post. Property tests, mutation testing, and stateful tests aren't only a defense against AI-written code. They're a way to tell an AI what correct means, in a form it can check its own work against. The agent does most of the writing; these layers are how I verify it.
+Mostly, though, the signal never reaches me. When the agent is writing code and a property test fails, that tells the agent something is wrong with its implementation, and it fixes the problem before I ever see it. "Make `all_sources` satisfy these four invariants" is a better instruction than "aggregate the unique sources," and a shrunk counterexample is a clearer bug report than anything I'd write by hand.
+
+That ties back to where this post started. I don't rely only on LLM agents to review code. I put strong signals into their loop, and those same signals tell me when something important changed. With these layers together, I have a reasonable level of confidence that the system works as intended and that changes aren't breaking it. Knowing that makes it easier to write code in the dark.
 
 ---
 
