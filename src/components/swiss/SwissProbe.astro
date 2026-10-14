@@ -1,0 +1,539 @@
+---
+// An interactive Swiss table: 32 slots in two groups of 16. Shows the hash
+// split into h1 and h2, the sixteen-byte compare as a row of ticks and crosses,
+// the candidate check, the empty-slot stop, and the two outcomes of a delete.
+import DemoControls from './DemoControls.astro';
+
+interface Props {
+  caption?: string;
+}
+const { caption } = Astro.props;
+---
+
+<figure class="swiss-probe" data-swiss-probe>
+  <DemoControls
+    ops={[
+      { op: 'lookup', label: 'lookup' },
+      { op: 'insert', label: 'insert' },
+      { op: 'delete', label: 'delete' },
+      { op: 'random', label: 'random key' },
+      { op: 'reset', label: 'reset' },
+    ]}
+  />
+
+  <div class="bits meta" data-bits aria-live="polite"></div>
+
+  <div class="table" data-table></div>
+
+  <div class="compare" data-compare hidden>
+    <div class="meta">compare the group's 16 control bytes with h2, all at once</div>
+    <div class="cmp-grid" data-cmp-grid></div>
+    <div class="meta">mask = <span class="mask" data-mask></span></div>
+  </div>
+
+  <div class="status meta">
+    <span data-load></span>
+    <span class="legend">
+      <i class="sw empty"></i>empty <i class="sw deleted"></i>deleted <i class="sw full"></i>full, showing its h2 tag
+    </span>
+  </div>
+
+  <ol class="demo-steps" data-steps aria-live="polite"></ol>
+
+  {caption && <figcaption class="demo-caption">{caption}</figcaption>}
+</figure>
+
+<script>
+  import { Stepper, hash32, hex, bin, type Step } from '../../lib/stepper';
+
+  const GROUP = 16;
+  const SLOTS = 32;
+  const NGROUPS = SLOTS / GROUP;
+  const EMPTY = 0x80;
+  const DELETED = 0xfe;
+  const MAX_ITEMS = SLOTS - SLOTS / 8; // 7/8 load: a real table would double here
+
+  type Table = { ctrl: Uint8Array; keys: (string | null)[] };
+  const newTable = (): Table => ({ ctrl: new Uint8Array(SLOTS).fill(EMPTY), keys: Array(SLOTS).fill(null) });
+  const count = (t: Table) => t.ctrl.reduce((n, c) => n + (c < 0x80 ? 1 : 0), 0);
+  const split = (h: number) => ({ h1: h >>> 7, h2: h & 0x7f, group: (h >>> 7) % NGROUPS });
+  // Triangular probing: group g, then g+1, g+3, g+6 ... (mod the group count).
+  const groupAt = (g: number, probe: number) => ((g + (probe * (probe + 1)) / 2) % NGROUPS) * GROUP;
+
+  // The prefill list is searched for two keys with the same group and tag, so a
+  // lookup can show a 7-bit tag match that is not a key match.
+  const CANDIDATES = [
+    'apple', 'pear', 'plum', 'fig', 'kiwi', 'lime', 'mango', 'peach', 'grape', 'melon', 'cherry', 'lemon',
+    'date', 'guava', 'papaya', 'quince', 'olive', 'yuzu', 'banana', 'berry', 'nectar', 'durian', 'lychee',
+    'apricot', 'citron', 'pomelo', 'tomato', 'ugli', 'currant', 'medlar', 'jujube', 'loquat', 'mulberry',
+  ];
+  function pickPrefill(): string[] {
+    const info = CANDIDATES.map((k) => ({ k, ...split(hash32(k)) }));
+    let pair: [string, string] | null = null;
+    for (let i = 0; i < info.length && !pair; i++)
+      for (let j = i + 1; j < info.length; j++)
+        if (info[i].group === info[j].group && info[i].h2 === info[j].h2) {
+          pair = [info[i].k, info[j].k];
+          break;
+        }
+    const rest = CANDIDATES.filter((k) => !pair || !pair.includes(k)).slice(0, 9);
+    return pair ? [pair[0], ...rest, pair[1]] : rest;
+  }
+
+  for (const root of document.querySelectorAll<HTMLElement>('[data-swiss-probe]')) {
+    const tableEl = root.querySelector<HTMLElement>('[data-table]')!;
+    const bitsEl = root.querySelector<HTMLElement>('[data-bits]')!;
+    const cmpEl = root.querySelector<HTMLElement>('[data-compare]')!;
+    const cmpGrid = root.querySelector<HTMLElement>('[data-cmp-grid]')!;
+    const maskEl = root.querySelector<HTMLElement>('[data-mask]')!;
+    const loadEl = root.querySelector<HTMLElement>('[data-load]')!;
+    const input = root.querySelector<HTMLInputElement>('.key')!;
+    const manual = root.querySelector<HTMLInputElement>('[data-manual]')!;
+    const nextBtn = root.querySelector<HTMLButtonElement>('[data-next]')!;
+    const finishBtn = root.querySelector<HTMLButtonElement>('[data-finish]')!;
+    const opButtons = [...root.querySelectorAll<HTMLButtonElement>('button[data-op]')];
+
+    let t = newTable();
+    const cells: HTMLElement[] = [];
+
+    const stepper = new Stepper(
+      root.querySelector('[data-steps]')!,
+      () => manual.checked,
+      () => {
+        nextBtn.hidden = !(stepper.running && manual.checked);
+        finishBtn.hidden = !stepper.running;
+      },
+    );
+    nextBtn.addEventListener('click', () => stepper.next());
+    finishBtn.addEventListener('click', () => stepper.finish());
+
+    for (let g = 0; g < NGROUPS; g++) {
+      const box = document.createElement('div');
+      box.className = 'group';
+      const label = document.createElement('div');
+      label.className = 'glabel meta';
+      label.textContent = `group ${g} · slots ${g * GROUP}–${g * GROUP + GROUP - 1}`;
+      box.append(label);
+      const row = document.createElement('div');
+      row.className = 'cells';
+      for (let i = 0; i < GROUP; i++) {
+        const cell = document.createElement('div');
+        cell.className = 'cell';
+        cell.innerHTML = '<span class="ctrl"></span><span class="k"></span>';
+        row.append(cell);
+        cells.push(cell);
+      }
+      box.append(row);
+      tableEl.append(box);
+    }
+
+    function render() {
+      for (let i = 0; i < SLOTS; i++) {
+        const c = t.ctrl[i];
+        const cell = cells[i];
+        cell.classList.toggle('empty', c === EMPTY);
+        cell.classList.toggle('deleted', c === DELETED);
+        cell.classList.toggle('full', c < 0x80);
+        cell.querySelector('.ctrl')!.textContent = c === EMPTY ? '·' : c === DELETED ? '✕' : c.toString(16).padStart(2, '0');
+        cell.querySelector('.k')!.textContent = t.keys[i] ?? '';
+        cell.title = c === EMPTY ? `slot ${i}: empty` : c === DELETED ? `slot ${i}: deleted` : `slot ${i}: ${t.keys[i]}, h2 = ${hex(c, 2)}`;
+      }
+      const n = count(t);
+      loadEl.textContent = `${n} of ${SLOTS} slots full · load ${(n / SLOTS).toFixed(2)} · a real table doubles at ${MAX_ITEMS}`;
+    }
+
+    const clearMarks = () => cells.forEach((c) => c.classList.remove('probe', 'match', 'hit', 'checked', 'stop', 'window'));
+    const mark = (idx: number[], cls: string) => idx.forEach((i) => cells[i].classList.add(cls));
+
+    function showBits(key: string, h: number) {
+      const { h1, h2, group } = split(h);
+      bitsEl.replaceChildren();
+      const line1 = document.createElement('div');
+      line1.textContent = `hash("${key}") = ${hex(h)} =`;
+      const bitsRow = document.createElement('div');
+      bitsRow.className = 'bitrow';
+      const b = bin(h, 32);
+      const high = document.createElement('span');
+      high.className = 'h1';
+      high.textContent = b.slice(0, 25);
+      const low = document.createElement('span');
+      low.className = 'h2';
+      low.textContent = b.slice(25);
+      bitsRow.append(high, low);
+      const line2 = document.createElement('div');
+      line2.innerHTML = `<span class="h1">h1 = the top 25 bits = ${h1}</span> → start at group h1 mod ${NGROUPS} = <strong>${group}</strong>`;
+      const line3 = document.createElement('div');
+      line3.innerHTML = `<span class="h2">h2 = the low 7 bits = ${bin(h2, 7)} = ${hex(h2, 2)}</span> → the tag stored in the control byte`;
+      bitsEl.append(line1, bitsRow, line2, line3);
+    }
+
+    function showCompare(start: number, h2: number) {
+      cmpGrid.replaceChildren();
+      let mask = '';
+      for (let i = 0; i < GROUP; i++) {
+        const c = t.ctrl[start + i];
+        const hit = c === h2;
+        mask += hit ? '1' : '0';
+        const col = document.createElement('div');
+        col.className = 'cmp' + (hit ? ' yes' : '');
+        col.innerHTML = `<span class="a"></span><span class="b"></span><span class="r"></span>`;
+        col.querySelector('.a')!.textContent = c === EMPTY ? '·' : c === DELETED ? '✕' : c.toString(16).padStart(2, '0');
+        col.querySelector('.b')!.textContent = h2.toString(16).padStart(2, '0');
+        col.querySelector('.r')!.textContent = hit ? '✓' : '✕';
+        cmpGrid.append(col);
+      }
+      maskEl.textContent = mask;
+      cmpEl.hidden = false;
+    }
+
+    function reset() {
+      t = newTable();
+      for (const k of pickPrefill()) rawInsert(k);
+      stepper.clear();
+      bitsEl.textContent = '';
+      cmpEl.hidden = true;
+      clearMarks();
+      render();
+    }
+
+    function firstFree(h: number): number {
+      const { group } = split(h);
+      for (let p = 0; p < NGROUPS; p++) {
+        const start = groupAt(group, p);
+        for (let i = 0; i < GROUP; i++) if (t.ctrl[start + i] >= 0x80) return start + i;
+      }
+      return -1;
+    }
+
+    function rawInsert(key: string) {
+      const h = hash32(key);
+      const i = firstFree(h);
+      t.ctrl[i] = split(h).h2;
+      t.keys[i] = key;
+    }
+
+    // Narrated probe. Mutation happens only in steps appended by the caller.
+    function probeSteps(key: string): { steps: Step[]; found: number } {
+      const h = hash32(key);
+      const { h2, group } = split(h);
+      const steps: Step[] = [];
+      steps.push({
+        text: `hash "${key}" and split the bits: h1 picks the starting group (${group}), h2 is the 7-bit tag (${hex(h2, 2)})`,
+        apply: () => { clearMarks(); cmpEl.hidden = true; showBits(key, h); },
+      });
+      for (let p = 0; p < NGROUPS; p++) {
+        const start = groupAt(group, p);
+        const g = start / GROUP;
+        steps.push({
+          text: `read the 16 control bytes of group ${g}${p ? ` (probe ${p + 1})` : ''}: one 16-byte load, usually one cache line`,
+          apply: () => { clearMarks(); mark(Array.from({ length: GROUP }, (_, i) => start + i), 'probe'); },
+        });
+        const matches: number[] = [];
+        for (let i = 0; i < GROUP; i++) if (t.ctrl[start + i] === h2) matches.push(start + i);
+        steps.push({
+          text: `compare all 16 bytes with h2 ${hex(h2, 2)} in one instruction → ${matches.length} candidate${matches.length === 1 ? '' : 's'}${matches.length ? ` at slot${matches.length > 1 ? 's' : ''} ${matches.join(', ')}` : ''}`,
+          apply: () => { showCompare(start, h2); mark(matches, 'match'); },
+        });
+        for (const i of matches) {
+          if (t.keys[i] === key) {
+            steps.push({ text: `read slot ${i} and compare the full key: "${t.keys[i]}" = "${key}" → found`, apply: () => mark([i], 'hit') });
+            return { steps, found: i };
+          }
+          steps.push({
+            text: `read slot ${i} and compare the full key: "${t.keys[i]}" ≠ "${key}". Same 7-bit tag, different key; this happens about 1 time in 128. Continue`,
+            apply: () => mark([i], 'checked'),
+          });
+        }
+        const empties: number[] = [];
+        for (let i = 0; i < GROUP; i++) if (t.ctrl[start + i] === EMPTY) empties.push(start + i);
+        if (empties.length) {
+          steps.push({
+            text: `the group has an empty slot (${empties[0]}), so an insert of "${key}" would have stopped in this group → not in the table`,
+            apply: () => mark(empties, 'stop'),
+          });
+          return { steps, found: -1 };
+        }
+        steps.push({ text: `no empty slot in group ${g} (deleted slots do not count), so the key may be in a later group → probe the next group in the sequence` });
+      }
+      return { steps, found: -1 };
+    }
+
+    function run(op: string) {
+      if (op === 'reset') return reset();
+      if (op === 'random') {
+        const pool = CANDIDATES.filter((k) => !t.keys.includes(k));
+        input.value = pool[Math.floor(Math.random() * pool.length)] ?? 'zest';
+        return;
+      }
+      const key = input.value.trim().toLowerCase();
+      if (!key) return;
+      const h = hash32(key);
+      const { h2 } = split(h);
+      const { steps, found } = probeSteps(key);
+      if (op === 'insert') {
+        if (found >= 0) steps.push({ text: `"${key}" is already here; a map would replace the value in slot ${found}` });
+        else if (count(t) >= MAX_ITEMS) steps.push({ text: `the table is at 7/8 load; a real table would now double to 64 slots and move every key. This demo stops here` });
+        else {
+          const i = firstFree(h);
+          steps.push({
+            text: `write h2 ${hex(h2, 2)} into control byte ${i} and "${key}" into slot ${i}: the first empty or deleted slot on the probe path`,
+            apply: () => { t.ctrl[i] = h2; t.keys[i] = key; render(); clearMarks(); cmpEl.hidden = true; mark([i], 'hit'); },
+          });
+        }
+      } else if (op === 'delete') {
+        if (found < 0) steps.push({ text: `nothing to delete` });
+        else {
+          // hashbrown's rule: count the run of non-empty bytes through this slot.
+          // If it is shorter than a group, no probe ever passed through a full
+          // group here, so the slot can go back to EMPTY.
+          const i = found;
+          const before = (i - GROUP + SLOTS) % SLOTS;
+          const windowIdx = Array.from({ length: 2 * GROUP }, (_, k) => (before + k) % SLOTS);
+          let lead = 0;
+          for (let k = 1; k <= GROUP; k++) {
+            if (t.ctrl[(i - k + SLOTS) % SLOTS] === EMPTY) break;
+            lead++;
+          }
+          let trail = 0;
+          for (let k = 0; k < GROUP; k++) {
+            if (t.ctrl[(i + k) % SLOTS] === EMPTY) break;
+            trail++;
+          }
+          const tombstone = lead + trail >= GROUP;
+          steps.push({
+            text: `look at the 16 control bytes before slot ${i} and the 16 from slot ${i}: ${lead} non-empty byte${lead === 1 ? '' : 's'} run up to it and ${trail} run from it`,
+            apply: () => { clearMarks(); cmpEl.hidden = true; mark(windowIdx, 'window'); mark([i], 'match'); },
+          });
+          steps.push({
+            text: tombstone
+              ? `${lead} + ${trail} ≥ 16: a probe may have crossed a full group through slot ${i}, so mark it DELETED. Later lookups will keep going past it`
+              : `${lead} + ${trail} < 16: no probe can have crossed a full group here, so slot ${i} goes straight back to EMPTY. No tombstone needed`,
+            apply: () => { t.ctrl[i] = tombstone ? DELETED : EMPTY; t.keys[i] = null; render(); mark([i], 'hit'); },
+          });
+        }
+      }
+      stepper.load(steps);
+    }
+
+    opButtons.forEach((b) => b.addEventListener('click', () => run(b.dataset.op!)));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') run('lookup');
+    });
+    manual.addEventListener('change', () => {
+      if (!manual.checked && stepper.running) stepper.finish();
+    });
+    reset();
+  }
+</script>
+
+<style is:global>
+  .swiss-probe {
+    margin: 2.25rem 0;
+    font-family: var(--font-mono);
+  }
+
+  .swiss-probe .bits {
+    min-height: 1.4rem;
+    margin-bottom: 0.75rem;
+    color: var(--fg);
+    line-height: 1.6;
+  }
+
+  .swiss-probe .bitrow {
+    letter-spacing: 0.08em;
+    font-size: 0.78rem;
+    overflow-wrap: anywhere;
+  }
+
+  .swiss-probe .h1 {
+    color: var(--muted);
+  }
+
+  .swiss-probe .bitrow .h1 {
+    border-bottom: 2px solid var(--muted);
+  }
+
+  .swiss-probe .h2 {
+    color: var(--accent);
+  }
+
+  .swiss-probe .bitrow .h2 {
+    border-bottom: 2px solid var(--accent);
+  }
+
+  .swiss-probe .bits strong {
+    color: var(--fg);
+  }
+
+  .swiss-probe .table {
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  .swiss-probe .group {
+    padding: 0.4rem 0.4rem 0.5rem;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    background: var(--surface);
+  }
+
+  .swiss-probe .glabel {
+    margin-bottom: 0.3rem;
+  }
+
+  .swiss-probe .cells {
+    display: grid;
+    grid-template-columns: repeat(16, 1fr);
+    gap: 2px;
+  }
+
+  @media (max-width: 34rem) {
+    .swiss-probe .cells {
+      grid-template-columns: repeat(8, 1fr);
+    }
+  }
+
+  .swiss-probe .cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 0;
+    padding: 0.25rem 0 0.2rem;
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    background: var(--bg);
+    font-size: 0.7rem;
+    line-height: 1.2;
+    transition: background 150ms, border-color 150ms, box-shadow 150ms;
+  }
+
+  .swiss-probe .cell .ctrl {
+    font-weight: 600;
+  }
+
+  .swiss-probe .cell .k {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.6rem;
+    color: var(--muted);
+    min-height: 0.75rem;
+  }
+
+  .swiss-probe .cell.empty .ctrl {
+    color: var(--muted);
+    opacity: 0.6;
+  }
+
+  .swiss-probe .cell.deleted {
+    background: repeating-linear-gradient(135deg, transparent 0 3px, var(--rule) 3px 4px);
+  }
+
+  .swiss-probe .cell.deleted .ctrl {
+    color: var(--muted);
+  }
+
+  .swiss-probe .cell.full .ctrl {
+    color: var(--fg);
+  }
+
+  .swiss-probe .cell.probe,
+  .swiss-probe .cell.window {
+    border-color: var(--muted);
+    background: color-mix(in srgb, var(--fg) 8%, var(--bg));
+  }
+
+  .swiss-probe .cell.match {
+    border-color: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+
+  .swiss-probe .cell.checked {
+    background: color-mix(in srgb, var(--fg) 14%, var(--bg));
+  }
+
+  .swiss-probe .cell.hit {
+    background: color-mix(in srgb, var(--accent) 22%, var(--bg));
+    border-color: var(--accent);
+  }
+
+  .swiss-probe .cell.stop {
+    border-style: dashed;
+    border-color: var(--fg);
+  }
+
+  .swiss-probe .compare {
+    margin-top: 0.75rem;
+    padding: 0.5rem 0.6rem;
+    border: 1px dashed var(--rule);
+    border-radius: 6px;
+  }
+
+  .swiss-probe .cmp-grid {
+    display: grid;
+    grid-template-columns: repeat(16, 1fr);
+    gap: 2px;
+    margin: 0.4rem 0;
+  }
+
+  @media (max-width: 34rem) {
+    .swiss-probe .cmp-grid {
+      grid-template-columns: repeat(8, 1fr);
+    }
+  }
+
+  .swiss-probe .cmp {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    font-size: 0.68rem;
+    line-height: 1.35;
+    color: var(--muted);
+  }
+
+  .swiss-probe .cmp .a {
+    color: var(--fg);
+  }
+
+  .swiss-probe .cmp .r {
+    font-weight: 600;
+  }
+
+  .swiss-probe .cmp.yes .r,
+  .swiss-probe .cmp.yes .b {
+    color: var(--accent);
+  }
+
+  .swiss-probe .mask {
+    color: var(--fg);
+    letter-spacing: 0.15em;
+  }
+
+  .swiss-probe .status {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 0.5rem 1rem;
+    margin-top: 0.6rem;
+  }
+
+  .swiss-probe .legend .sw {
+    display: inline-block;
+    width: 0.7rem;
+    height: 0.7rem;
+    margin: 0 0.3rem 0 0.6rem;
+    vertical-align: -0.05rem;
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    background: var(--bg);
+  }
+
+  .swiss-probe .legend .sw.deleted {
+    background: repeating-linear-gradient(135deg, transparent 0 2px, var(--rule) 2px 3px);
+  }
+
+  .swiss-probe .legend .sw.full {
+    border-color: var(--accent);
+  }
+</style>

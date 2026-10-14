@@ -1,0 +1,426 @@
+---
+// A small line chart for the benchmark results: log-x table size, linear-y
+// metric, one tab per panel, crosshair tooltip, direct end labels when they
+// fit, and a table view. Drawn on the server; the script only moves the crosshair.
+import type { Panel } from '../../lib/swisstable';
+
+interface Props {
+  panels: Panel[];
+  yLabel: string;
+  xLabel?: string;
+  caption?: string;
+  yUnit?: string;
+}
+const { panels, yLabel, xLabel = 'entries in the table', caption, yUnit = '' } = Astro.props;
+
+const W = 640;
+const H = 320;
+const L = 52;
+const R = 150;
+const T = 30;
+const B = 46;
+
+const compact = (n: number) => (n >= 1e6 ? `${n / 1e6}M` : n >= 1e3 ? `${n / 1e3}K` : String(n));
+const fmtY = (v: number) => (v === 0 ? '0' : v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2));
+
+function niceMax(v: number) {
+  const p = 10 ** Math.floor(Math.log10(v));
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p;
+  return 10 * p;
+}
+
+const drawn = panels.map((panel) => {
+  const xs = [...new Set(panel.series.flatMap((s) => s.points.map((p) => p.x)))].sort((a, b) => a - b);
+  const xMin = Math.log10(xs[0]);
+  const xMax = Math.log10(xs[xs.length - 1]);
+  const yMax = niceMax(Math.max(...panel.series.flatMap((s) => s.points.map((p) => p.y))) * 1.05);
+  const x = (v: number) => L + ((Math.log10(v) - xMin) / (xMax - xMin || 1)) * (W - L - R);
+  const y = (v: number) => T + (1 - v / yMax) * (H - T - B);
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => f * yMax);
+  const series = panel.series.map((s) => ({
+    ...s,
+    d: s.points.map((p, i) => `${i ? 'L' : 'M'}${x(p.x).toFixed(1)},${y(p.y).toFixed(1)}`).join(''),
+    end: s.points[s.points.length - 1],
+    endY: y(s.points[s.points.length - 1].y),
+  }));
+  // Direct end labels only when they don't collide; the legend is always there.
+  const ends = series.map((s) => s.endY).sort((a, b) => a - b);
+  const labelsFit = ends.every((v, i) => i === 0 || v - ends[i - 1] >= 13);
+  return { panel, xs, x, y, yMax, yTicks, series, labelsFit };
+});
+---
+
+<figure class="bench" data-bench>
+  {
+    panels.length > 1 && (
+      <div class="tabs" role="tablist">
+        {panels.map((p, i) => (
+          <button type="button" role="tab" aria-selected={i === 0 ? 'true' : 'false'} data-tab={i}>
+            {p.label}
+          </button>
+        ))}
+      </div>
+    )
+  }
+  <div class="legend meta">
+    {
+      drawn[0].series.map((s) => (
+        <span>
+          <i class={`line s${s.slot}`} />
+          {s.name}
+        </span>
+      ))
+    }
+  </div>
+  {
+    drawn.map((d, i) => (
+      <div class="panel" data-panel={i} hidden={i !== 0}>
+        <div class="plot">
+          <svg
+            viewBox={`0 0 ${W} ${H}`}
+            role="img"
+            aria-label={`${yLabel} against ${xLabel}, ${d.panel.label}`}
+            tabindex="0"
+            data-xs={JSON.stringify(d.xs)}
+            data-px={JSON.stringify(d.xs.map((v) => d.x(v)))}
+            data-values={JSON.stringify(
+              d.series.map((s) => ({ name: s.name, slot: s.slot, ys: d.xs.map((v) => s.points.find((p) => p.x === v)?.y ?? null) })),
+            )}
+            data-py={JSON.stringify(d.series.map((s) => d.xs.map((v) => (s.points.find((p) => p.x === v) ? d.y(s.points.find((p) => p.x === v)!.y) : null))))}
+          >
+            {d.yTicks.map((v) => (
+              <>
+                <line class="grid" x1={L} x2={W - R} y1={d.y(v)} y2={d.y(v)} />
+                <text class="tick" x={L - 8} y={d.y(v) + 4} text-anchor="end">
+                  {fmtY(v)}
+                </text>
+              </>
+            ))}
+            {d.xs.map((v) => (
+              <text class="tick" x={d.x(v)} y={H - 24} text-anchor="middle">
+                {compact(v)}
+              </text>
+            ))}
+            <text class="tick" x={L} y={T - 12}>
+              {yLabel}
+            </text>
+            <text class="tick" x={W - R} y={H - 6} text-anchor="end">
+              {xLabel}
+            </text>
+            <line class="cross" x1={L} x2={L} y1={T} y2={H - B} data-cross />
+            {d.series.map((s) => (
+              <>
+                <path class={`series s${s.slot}`} d={s.d} />
+                {s.points.map((p) => (
+                  <circle class={`dot s${s.slot}`} cx={d.x(p.x)} cy={d.y(p.y)} r="4" />
+                ))}
+                {d.labelsFit && (
+                  <text class="label" x={W - R + 10} y={s.endY + 4}>
+                    {fmtY(s.end.y)}
+                    {yUnit} {s.name}
+                  </text>
+                )}
+              </>
+            ))}
+          </svg>
+          <div class="tip meta" data-tip hidden />
+        </div>
+        <details class="meta">
+          <summary>table</summary>
+          <table>
+            <thead>
+              <tr>
+                <th>{xLabel}</th>
+                {d.series.map((s) => (
+                  <th>{s.name}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {d.xs.map((v) => (
+                <tr>
+                  <td>{compact(v)}</td>
+                  {d.series.map((s) => (
+                    <td>{fmtY(s.points.find((p) => p.x === v)?.y ?? NaN)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      </div>
+    ))
+  }
+  {caption && <figcaption>{caption}</figcaption>}
+</figure>
+
+<script>
+  for (const root of document.querySelectorAll<HTMLElement>('[data-bench]')) {
+    const tabs = [...root.querySelectorAll<HTMLButtonElement>('[data-tab]')];
+    const panels = [...root.querySelectorAll<HTMLElement>('[data-panel]')];
+    tabs.forEach((tab) =>
+      tab.addEventListener('click', () => {
+        tabs.forEach((t) => t.setAttribute('aria-selected', t === tab ? 'true' : 'false'));
+        panels.forEach((p) => (p.hidden = p.dataset.panel !== tab.dataset.tab));
+      }),
+    );
+
+    for (const panel of panels) {
+      const svg = panel.querySelector<SVGSVGElement>('svg')!;
+      const tip = panel.querySelector<HTMLElement>('[data-tip]')!;
+      const cross = svg.querySelector<SVGLineElement>('[data-cross]')!;
+      const xs = JSON.parse(svg.dataset.xs!) as number[];
+      const px = JSON.parse(svg.dataset.px!) as number[];
+      const values = JSON.parse(svg.dataset.values!) as { name: string; slot: number; ys: (number | null)[] }[];
+      const compact = (n: number) => (n >= 1e6 ? `${n / 1e6}M` : n >= 1e3 ? `${n / 1e3}K` : String(n));
+      const fmt = (v: number) => (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2));
+      let idx = -1;
+
+      function show(i: number) {
+        idx = i;
+        cross.setAttribute('x1', String(px[i]));
+        cross.setAttribute('x2', String(px[i]));
+        cross.classList.add('on');
+        tip.replaceChildren();
+        const h = document.createElement('div');
+        h.className = 'tip-x';
+        h.textContent = `${compact(xs[i])} entries`;
+        tip.append(h);
+        for (const s of values) {
+          const row = document.createElement('div');
+          const key = document.createElement('i');
+          key.className = `line s${s.slot}`;
+          const val = document.createElement('strong');
+          val.textContent = s.ys[i] === null ? '–' : fmt(s.ys[i]!);
+          const name = document.createElement('span');
+          name.textContent = ` ${s.name}`;
+          row.append(key, val, name);
+          tip.append(row);
+        }
+        tip.hidden = false;
+        const rect = svg.getBoundingClientRect();
+        const left = (px[i] / 640) * rect.width;
+        tip.style.left = `${Math.min(left + 12, rect.width - tip.offsetWidth - 4)}px`;
+        tip.style.top = '8px';
+      }
+      function hide() {
+        cross.classList.remove('on');
+        tip.hidden = true;
+        idx = -1;
+      }
+      svg.addEventListener('pointermove', (e) => {
+        const rect = svg.getBoundingClientRect();
+        const vx = ((e.clientX - rect.left) / rect.width) * 640;
+        let best = 0;
+        px.forEach((p, i) => {
+          if (Math.abs(p - vx) < Math.abs(px[best] - vx)) best = i;
+        });
+        show(best);
+      });
+      svg.addEventListener('pointerleave', hide);
+      svg.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowRight') show(Math.min(xs.length - 1, idx + 1));
+        else if (e.key === 'ArrowLeft') show(Math.max(0, idx < 0 ? 0 : idx - 1));
+        else if (e.key === 'Escape') hide();
+        else return;
+        e.preventDefault();
+      });
+      svg.addEventListener('blur', hide);
+    }
+  }
+</script>
+
+<style>
+  .bench {
+    margin: 2.25rem 0;
+    font-family: var(--font-mono);
+    --s1: #2a78d6;
+    --s2: #e87ba4;
+    --s3: #17703a;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .bench {
+      --s1: #3987e5;
+      --s2: #d55181;
+      --s3: #008300;
+    }
+  }
+
+  .tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-bottom: 0.6rem;
+  }
+
+  .tabs button {
+    padding: 0.3rem 0.65rem;
+    font: 500 0.78rem var(--font-mono);
+    color: var(--muted);
+    background: transparent;
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    cursor: pointer;
+  }
+
+  .tabs button[aria-selected='true'] {
+    color: var(--fg);
+    border-color: var(--accent);
+  }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1rem;
+    margin-bottom: 0.4rem;
+  }
+
+  .bench :global(.line) {
+    display: inline-block;
+    width: 1rem;
+    height: 0;
+    margin-right: 0.4rem;
+    vertical-align: middle;
+    border-top: 2px solid currentColor;
+  }
+
+  .bench :global(.line.s1) {
+    color: var(--s1);
+  }
+
+  .bench :global(.line.s2) {
+    color: var(--s2);
+  }
+
+  .bench :global(.line.s3) {
+    color: var(--s3);
+  }
+
+  .plot {
+    position: relative;
+  }
+
+  svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    touch-action: pan-y;
+  }
+
+  svg:focus-visible {
+    outline: 2px solid var(--accent);
+  }
+
+  .grid {
+    stroke: var(--rule);
+  }
+
+  .tick {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    fill: var(--muted);
+  }
+
+  .label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    fill: var(--fg);
+  }
+
+  .series {
+    fill: none;
+    stroke-width: 2;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+  }
+
+  .s1 {
+    stroke: var(--s1);
+  }
+
+  .s2 {
+    stroke: var(--s2);
+  }
+
+  .s3 {
+    stroke: var(--s3);
+  }
+
+  .dot {
+    stroke: var(--surface);
+    stroke-width: 2;
+  }
+
+  .dot.s1 {
+    fill: var(--s1);
+  }
+
+  .dot.s2 {
+    fill: var(--s2);
+  }
+
+  .dot.s3 {
+    fill: var(--s3);
+  }
+
+  .cross {
+    stroke: var(--fg);
+    opacity: 0;
+  }
+
+  .cross.on {
+    opacity: 0.5;
+  }
+
+  .tip {
+    position: absolute;
+    pointer-events: none;
+    padding: 0.4rem 0.6rem;
+    background: var(--bg);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    font-size: 0.72rem;
+    line-height: 1.5;
+    white-space: nowrap;
+  }
+
+  .tip :global(strong) {
+    color: var(--fg);
+  }
+
+  .tip :global(.tip-x) {
+    margin-bottom: 0.15rem;
+  }
+
+  details {
+    margin-top: 0.4rem;
+  }
+
+  summary {
+    cursor: pointer;
+  }
+
+  table {
+    margin-top: 0.4rem;
+    border-collapse: collapse;
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  th,
+  td {
+    padding: 0.15rem 0.7rem 0.15rem 0;
+    text-align: right;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  figcaption {
+    margin-top: 0.75rem;
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+</style>

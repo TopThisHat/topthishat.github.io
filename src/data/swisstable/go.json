@@ -1,0 +1,257 @@
+{
+ "go": "go version go1.25.3 darwin/arm64",
+ "rows": [
+  {
+   "bench": "IntInsert",
+   "n": 1000,
+   "table": "old",
+   "ns_per_op": 46056.0,
+   "bytes_per_op": 86552,
+   "bytes_per_item": 86.552,
+   "ns_per_insert": 46.056
+  },
+  {
+   "bench": "IntInsert",
+   "n": 1000,
+   "table": "swiss",
+   "ns_per_op": 37993.0,
+   "bytes_per_op": 74264,
+   "bytes_per_item": 74.264,
+   "ns_per_insert": 37.993
+  },
+  {
+   "bench": "IntInsert",
+   "n": 100000,
+   "table": "old",
+   "ns_per_op": 4277023.0,
+   "bytes_per_op": 5755128,
+   "bytes_per_item": 57.55128,
+   "ns_per_insert": 42.77023
+  },
+  {
+   "bench": "IntInsert",
+   "n": 100000,
+   "table": "swiss",
+   "ns_per_op": 3204763.0,
+   "bytes_per_op": 4729479,
+   "bytes_per_item": 47.29479,
+   "ns_per_insert": 32.04763
+  },
+  {
+   "bench": "IntInsert",
+   "n": 1000000,
+   "table": "old",
+   "ns_per_op": 80561372.0,
+   "bytes_per_op": 87728049,
+   "bytes_per_item": 87.728049,
+   "ns_per_insert": 80.561372
+  },
+  {
+   "bench": "IntInsert",
+   "n": 1000000,
+   "table": "swiss",
+   "ns_per_op": 53009395.0,
+   "bytes_per_op": 75500921,
+   "bytes_per_item": 75.500921,
+   "ns_per_insert": 53.009395
+  },
+  {
+   "bench": "IntLookupHit",
+   "n": 1000,
+   "table": "old",
+   "ns_per_op": 7.206
+  },
+  {
+   "bench": "IntLookupHit",
+   "n": 1000,
+   "table": "swiss",
+   "ns_per_op": 7.375
+  },
+  {
+   "bench": "IntLookupHit",
+   "n": 100000,
+   "table": "old",
+   "ns_per_op": 25.36
+  },
+  {
+   "bench": "IntLookupHit",
+   "n": 100000,
+   "table": "swiss",
+   "ns_per_op": 10.94
+  },
+  {
+   "bench": "IntLookupHit",
+   "n": 1000000,
+   "table": "old",
+   "ns_per_op": 41.68
+  },
+  {
+   "bench": "IntLookupHit",
+   "n": 1000000,
+   "table": "swiss",
+   "ns_per_op": 36.43
+  },
+  {
+   "bench": "IntLookupMiss",
+   "n": 1000,
+   "table": "old",
+   "ns_per_op": 7.597
+  },
+  {
+   "bench": "IntLookupMiss",
+   "n": 1000,
+   "table": "swiss",
+   "ns_per_op": 7.55
+  },
+  {
+   "bench": "IntLookupMiss",
+   "n": 100000,
+   "table": "old",
+   "ns_per_op": 12.25
+  },
+  {
+   "bench": "IntLookupMiss",
+   "n": 100000,
+   "table": "swiss",
+   "ns_per_op": 25.18
+  },
+  {
+   "bench": "IntLookupMiss",
+   "n": 1000000,
+   "table": "old",
+   "ns_per_op": 37.97
+  },
+  {
+   "bench": "IntLookupMiss",
+   "n": 1000000,
+   "table": "swiss",
+   "ns_per_op": 28.12
+  },
+  {
+   "bench": "StrInsert",
+   "n": 1000,
+   "table": "old",
+   "ns_per_op": 75084.0,
+   "bytes_per_op": 122103,
+   "bytes_per_item": 122.103,
+   "ns_per_insert": 75.084
+  },
+  {
+   "bench": "StrInsert",
+   "n": 1000,
+   "table": "swiss",
+   "ns_per_op": 55910.0,
+   "bytes_per_op": 108760,
+   "bytes_per_item": 108.76,
+   "ns_per_insert": 55.91
+  },
+  {
+   "bench": "StrInsert",
+   "n": 100000,
+   "table": "old",
+   "ns_per_op": 6433554.0,
+   "bytes_per_op": 8087055,
+   "bytes_per_item": 80.87055,
+   "ns_per_insert": 64.33554
+  },
+  {
+   "bench": "StrInsert",
+   "n": 100000,
+   "table": "swiss",
+   "ns_per_op": 5474001.0,
+   "bytes_per_op": 6989507,
+   "bytes_per_item": 69.89507,
+   "ns_per_insert": 54.74001
+  },
+  {
+   "bench": "StrInsert",
+   "n": 1000000,
+   "table": "old",
+   "ns_per_op": 170789979.0,
+   "bytes_per_op": 123851544,
+   "bytes_per_item": 123.851544,
+   "ns_per_insert": 170.789979
+  },
+  {
+   "bench": "StrInsert",
+   "n": 1000000,
+   "table": "swiss",
+   "ns_per_op": 108969367.0,
+   "bytes_per_op": 111579176,
+   "bytes_per_item": 111.579176,
+   "ns_per_insert": 108.969367
+  },
+  {
+   "bench": "StrLookupHit",
+   "n": 1000,
+   "table": "old",
+   "ns_per_op": 10.34
+  },
+  {
+   "bench": "StrLookupHit",
+   "n": 1000,
+   "table": "swiss",
+   "ns_per_op": 13.58
+  },
+  {
+   "bench": "StrLookupHit",
+   "n": 100000,
+   "table": "old",
+   "ns_per_op": 40.8
+  },
+  {
+   "bench": "StrLookupHit",
+   "n": 100000,
+   "table": "swiss",
+   "ns_per_op": 17.39
+  },
+  {
+   "bench": "StrLookupHit",
+   "n": 1000000,
+   "table": "old",
+   "ns_per_op": 59.58
+  },
+  {
+   "bench": "StrLookupHit",
+   "n": 1000000,
+   "table": "swiss",
+   "ns_per_op": 48.63
+  },
+  {
+   "bench": "StrLookupMiss",
+   "n": 1000,
+   "table": "old",
+   "ns_per_op": 28.37
+  },
+  {
+   "bench": "StrLookupMiss",
+   "n": 1000,
+   "table": "swiss",
+   "ns_per_op": 10.69
+  },
+  {
+   "bench": "StrLookupMiss",
+   "n": 100000,
+   "table": "old",
+   "ns_per_op": 52.44
+  },
+  {
+   "bench": "StrLookupMiss",
+   "n": 100000,
+   "table": "swiss",
+   "ns_per_op": 30.77
+  },
+  {
+   "bench": "StrLookupMiss",
+   "n": 1000000,
+   "table": "old",
+   "ns_per_op": 75.24
+  },
+  {
+   "bench": "StrLookupMiss",
+   "n": 1000000,
+   "table": "swiss",
+   "ns_per_op": 37.4
+  }
+ ]
+}

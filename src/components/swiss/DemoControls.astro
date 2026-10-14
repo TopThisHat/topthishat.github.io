@@ -1,0 +1,124 @@
+---
+// The shared control strip for the hash table demos: a key field, the
+// operations, and the step controls.
+interface Props {
+  ops: { op: string; label: string }[];
+  defaultKey?: string;
+}
+const { ops, defaultKey = 'pear' } = Astro.props;
+---
+
+<div class="demo-controls">
+  <label>
+    <span class="meta">key</span>
+    <input type="text" class="key" value={defaultKey} maxlength="12" spellcheck="false" autocomplete="off" />
+  </label>
+  {
+    ops.map((o) => (
+      <button type="button" data-op={o.op}>
+        {o.label}
+      </button>
+    ))
+  }
+  <span class="spacer"></span>
+  <label class="manual meta">
+    <input type="checkbox" data-manual /> step by step
+  </label>
+  <button type="button" data-next class="quiet" hidden>next step</button>
+  <button type="button" data-finish class="quiet" hidden>finish</button>
+</div>
+
+<style is:global>
+  .demo-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: end;
+    margin-bottom: 0.75rem;
+    font-family: var(--font-mono);
+  }
+
+  .demo-controls label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .demo-controls label.manual {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.35rem;
+    padding-bottom: 0.45rem;
+  }
+
+  .demo-controls input[type='text'] {
+    width: 8rem;
+    padding: 0.35rem 0.5rem;
+    font: 500 0.85rem var(--font-mono);
+    color: var(--fg);
+    background: var(--bg);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+  }
+
+  .demo-controls input[type='checkbox'] {
+    accent-color: var(--accent);
+    margin: 0;
+  }
+
+  .demo-controls button {
+    padding: 0.4rem 0.7rem;
+    font: 500 0.8rem var(--font-mono);
+    color: var(--fg);
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .demo-controls button:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .demo-controls button:disabled {
+    opacity: 0.5;
+  }
+
+  .demo-controls button.quiet {
+    background: transparent;
+  }
+
+  .demo-controls .spacer {
+    flex: 1;
+  }
+
+  .demo-steps {
+    margin: 0.9rem 0 0;
+    padding-left: 1.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    line-height: 1.5;
+    color: var(--muted);
+    min-height: 2rem;
+  }
+
+  .demo-steps li {
+    margin-bottom: 0.2rem;
+  }
+
+  .demo-steps li.current {
+    color: var(--fg);
+  }
+
+  .demo-steps li::marker {
+    color: var(--accent);
+  }
+
+  .demo-caption {
+    margin-top: 0.75rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+</style>

@@ -1,0 +1,402 @@
+---
+// A small hash table you can operate on, in one of two layouts:
+//   chaining: 8 buckets, each the head of a linked list of nodes
+//   linear:   16 slots in one array, collisions step to the next slot
+// Every operation is narrated, and each memory read is counted.
+import DemoControls from './DemoControls.astro';
+
+interface Props {
+  mode: 'chaining' | 'linear';
+  caption?: string;
+}
+const { mode, caption } = Astro.props;
+const N = mode === 'chaining' ? 8 : 16;
+---
+
+<figure class={`probe-demo ${mode}`} data-probe-demo={mode} data-n={N}>
+  <DemoControls
+    ops={[
+      { op: 'lookup', label: 'lookup' },
+      { op: 'insert', label: 'insert' },
+      { op: 'delete', label: 'delete' },
+      { op: 'random', label: 'random key' },
+      { op: 'reset', label: 'reset' },
+    ]}
+  />
+  <div class="hashline meta" data-hash aria-live="polite"></div>
+  <div class="table" data-table></div>
+  <div class="status meta">
+    <span data-load></span>
+    <span>memory reads this operation: <strong data-reads>0</strong></span>
+  </div>
+  <ol class="demo-steps" data-steps aria-live="polite"></ol>
+  {caption && <figcaption class="demo-caption">{caption}</figcaption>}
+</figure>
+
+<script>
+  import { Stepper, hash32, hex, type Step } from '../../lib/stepper';
+
+  const CANDIDATES = [
+    'pear', 'mango', 'plum', 'fig', 'kiwi', 'lime', 'apple', 'peach', 'grape', 'melon', 'cherry', 'lemon',
+    'date', 'guava', 'papaya', 'quince', 'olive', 'yuzu', 'banana', 'berry', 'durian', 'lychee', 'apricot',
+  ];
+  const TOMB = '†';
+
+  for (const root of document.querySelectorAll<HTMLElement>('[data-probe-demo]')) {
+    const mode = root.dataset.probeDemo as 'chaining' | 'linear';
+    const N = Number(root.dataset.n);
+    const tableEl = root.querySelector<HTMLElement>('[data-table]')!;
+    const hashEl = root.querySelector<HTMLElement>('[data-hash]')!;
+    const loadEl = root.querySelector<HTMLElement>('[data-load]')!;
+    const readsEl = root.querySelector<HTMLElement>('[data-reads]')!;
+    const input = root.querySelector<HTMLInputElement>('.key')!;
+    const manual = root.querySelector<HTMLInputElement>('[data-manual]')!;
+    const nextBtn = root.querySelector<HTMLButtonElement>('[data-next]')!;
+    const finishBtn = root.querySelector<HTMLButtonElement>('[data-finish]')!;
+    const opButtons = [...root.querySelectorAll<HTMLButtonElement>('button[data-op]')];
+
+    // chaining: chains[b] is a list of keys, head first. linear: slots[i] is a key, null, or TOMB.
+    let chains: string[][] = [];
+    let slots: (string | null)[] = [];
+    let reads = 0;
+
+    const stepper = new Stepper(
+      root.querySelector('[data-steps]')!,
+      () => manual.checked,
+      () => {
+        const active = stepper.running;
+        nextBtn.hidden = !(active && manual.checked);
+        finishBtn.hidden = !active;
+        readsEl.textContent = String(reads);
+      },
+    );
+    nextBtn.addEventListener('click', () => stepper.next());
+    finishBtn.addEventListener('click', () => stepper.finish());
+
+    const index = (key: string) => hash32(key) % N;
+
+    function render() {
+      tableEl.replaceChildren();
+      if (mode === 'chaining') {
+        chains.forEach((chain, b) => {
+          const row = document.createElement('div');
+          row.className = 'bucket-row';
+          const head = document.createElement('span');
+          head.className = 'bucket';
+          head.dataset.bucket = String(b);
+          head.textContent = `[${b}]`;
+          row.append(head);
+          chain.forEach((k) => {
+            const arrow = document.createElement('span');
+            arrow.className = 'arrow';
+            arrow.textContent = '→';
+            const node = document.createElement('span');
+            node.className = 'node';
+            node.dataset.key = k;
+            node.textContent = k;
+            row.append(arrow, node);
+          });
+          const end = document.createElement('span');
+          end.className = 'arrow end';
+          end.textContent = chain.length ? '→ ∅' : '∅';
+          row.append(end);
+          tableEl.append(row);
+        });
+        const n = chains.reduce((a, c) => a + c.length, 0);
+        loadEl.textContent = `${n} keys in ${N} buckets · load ${(n / N).toFixed(2)}`;
+      } else {
+        const row = document.createElement('div');
+        row.className = 'slots';
+        slots.forEach((k, i) => {
+          const cell = document.createElement('div');
+          cell.className = 'slot' + (k === null ? ' empty' : k === TOMB ? ' tomb' : ' full');
+          cell.dataset.slot = String(i);
+          cell.innerHTML = `<span class="idx"></span><span class="k"></span>`;
+          cell.querySelector('.idx')!.textContent = String(i);
+          cell.querySelector('.k')!.textContent = k === null ? '·' : k === TOMB ? '✕' : k;
+          row.append(cell);
+        });
+        tableEl.append(row);
+        const n = slots.filter((k) => k !== null && k !== TOMB).length;
+        const t = slots.filter((k) => k === TOMB).length;
+        loadEl.textContent = `${n} keys in ${N} slots · load ${(n / N).toFixed(2)}${t ? ` · ${t} tombstone${t > 1 ? 's' : ''}` : ''}`;
+      }
+    }
+
+    const clearMarks = () => tableEl.querySelectorAll('.probe, .hit, .stop').forEach((e) => e.classList.remove('probe', 'hit', 'stop'));
+    const markBucket = (b: number, cls: string) => tableEl.querySelector(`[data-bucket="${b}"]`)?.classList.add(cls);
+    const markNode = (k: string, cls: string) => tableEl.querySelector(`[data-key="${CSS.escape(k)}"]`)?.classList.add(cls);
+    const markSlot = (i: number, cls: string) => tableEl.querySelector(`[data-slot="${i}"]`)?.classList.add(cls);
+
+    function showHash(key: string) {
+      const h = hash32(key);
+      hashEl.replaceChildren();
+      for (const t of [`hash("${key}") = ${hex(h)}`, `index = hash mod ${N} = ${h % N}`]) {
+        const s = document.createElement('span');
+        s.textContent = t;
+        hashEl.append(s);
+      }
+    }
+
+    function reset() {
+      chains = Array.from({ length: N }, () => []);
+      slots = Array(N).fill(null);
+      for (const k of CANDIDATES.slice(0, mode === 'chaining' ? 7 : 9)) rawInsert(k);
+      stepper.clear();
+      hashEl.textContent = '';
+      reads = 0;
+      render();
+    }
+
+    function rawInsert(k: string) {
+      const i = index(k);
+      if (mode === 'chaining') chains[i].unshift(k);
+      else {
+        let j = i;
+        while (slots[j] !== null && slots[j] !== TOMB) j = (j + 1) % N;
+        slots[j] = k;
+      }
+    }
+
+    // Build the narrated probe for a key. Returns the steps plus where it ended.
+    function probeSteps(key: string): { steps: Step[]; found: boolean; at: number; free: number } {
+      const i = index(key);
+      const steps: Step[] = [];
+      reads = 0;
+      steps.push({ text: `hash the key and take it mod ${N}: start at ${mode === 'chaining' ? 'bucket' : 'slot'} ${i}`, apply: () => { clearMarks(); showHash(key); } });
+      if (mode === 'chaining') {
+        const chain = chains[i];
+        steps.push({
+          text: `read bucket[${i}] (1 memory read): ${chain.length ? `pointer to node "${chain[0]}"` : 'null, the chain is empty'}`,
+          apply: () => { reads++; markBucket(i, 'probe'); },
+        });
+        for (let n = 0; n < chain.length; n++) {
+          const k = chain[n];
+          const last = n === chain.length - 1;
+          if (k === key) {
+            steps.push({ text: `read node "${k}" (${n + 2} reads so far): key matches → found`, apply: () => { reads++; markNode(k, 'hit'); } });
+            return { steps, found: true, at: i, free: i };
+          }
+          steps.push({
+            text: `read node "${k}" (${n + 2} reads so far): key differs, follow its next pointer${last ? ', which is null' : ''}`,
+            apply: () => { reads++; markNode(k, 'probe'); },
+          });
+        }
+        steps.push({ text: `end of chain → "${key}" is not in the table`, apply: () => markBucket(i, 'stop') });
+        return { steps, found: false, at: -1, free: i };
+      }
+      let free = -1;
+      for (let n = 0; n < N; n++) {
+        const j = (i + n) % N;
+        const k = slots[j];
+        if (k === null) {
+          steps.push({ text: `slot ${j}: empty → the key would have been placed here or earlier, so "${key}" is not in the table`, apply: () => { reads++; markSlot(j, 'stop'); } });
+          return { steps, found: false, at: -1, free: free < 0 ? j : free };
+        }
+        if (k === TOMB) {
+          if (free < 0) free = j;
+          steps.push({ text: `slot ${j}: tombstone. Something was deleted here, so keep going`, apply: () => { reads++; markSlot(j, 'probe'); } });
+          continue;
+        }
+        if (k === key) {
+          steps.push({ text: `slot ${j}: "${k}" matches → found after ${n + 1} slot${n ? 's' : ''}`, apply: () => { reads++; markSlot(j, 'hit'); } });
+          return { steps, found: true, at: j, free: j };
+        }
+        steps.push({ text: `slot ${j}: "${k}" is a different key, step to slot ${(j + 1) % N}`, apply: () => { reads++; markSlot(j, 'probe'); } });
+      }
+      steps.push({ text: `walked the whole table without finding an empty slot → not found` });
+      return { steps, found: false, at: -1, free };
+    }
+
+    function run(op: string) {
+      if (op === 'reset') return reset();
+      if (op === 'random') {
+        const present = mode === 'chaining' ? chains.flat() : slots;
+        const pool = CANDIDATES.filter((k) => !present.includes(k));
+        input.value = pool[Math.floor(Math.random() * pool.length)] ?? 'zest';
+        return;
+      }
+      const key = input.value.trim().toLowerCase();
+      if (!key) return;
+      const { steps, found, at, free } = probeSteps(key);
+      if (op === 'insert') {
+        if (found) steps.push({ text: `"${key}" is already present; a map would replace its value here` });
+        else if (mode === 'chaining') {
+          steps.push({
+            text: `allocate a node for "${key}" and make it the new head of bucket ${free}`,
+            apply: () => { chains[free].unshift(key); render(); markNode(key, 'hit'); },
+          });
+        } else if (free < 0) {
+          steps.push({ text: `no free slot; a real table would have resized long before this point` });
+        } else {
+          steps.push({
+            text: `write "${key}" into slot ${free}, the first empty or tombstone slot on the path`,
+            apply: () => { slots[free] = key; render(); markSlot(free, 'hit'); },
+          });
+        }
+      } else if (op === 'delete') {
+        if (!found) steps.push({ text: `nothing to delete` });
+        else if (mode === 'chaining') {
+          steps.push({
+            text: `unlink the node for "${key}" from bucket ${at} and free it`,
+            apply: () => { chains[at] = chains[at].filter((k) => k !== key); render(); markBucket(at, 'hit'); },
+          });
+        } else {
+          const nextKey = slots[(at + 1) % N];
+          steps.push({
+            text:
+              nextKey && nextKey !== TOMB
+                ? `slot ${at} cannot simply become empty: "${nextKey}" in slot ${(at + 1) % N} may have been placed by a probe that passed through here, and a lookup for it would stop early. Write a tombstone instead`
+                : `the next slot is empty, so nothing probed past this slot, but the simple rule is to always write a tombstone`,
+            apply: () => { slots[at] = TOMB; render(); markSlot(at, 'hit'); },
+          });
+        }
+      } else if (!found) {
+        // lookup miss: the probe steps already say so
+      }
+      stepper.load(steps);
+    }
+
+    opButtons.forEach((b) => b.addEventListener('click', () => run(b.dataset.op!)));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') run('lookup');
+    });
+    manual.addEventListener('change', () => {
+      if (!manual.checked && stepper.running) stepper.finish();
+    });
+    reset();
+  }
+</script>
+
+<style is:global>
+  .probe-demo {
+    margin: 2.25rem 0;
+    font-family: var(--font-mono);
+  }
+
+  .probe-demo .hashline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1.25rem;
+    min-height: 1.4rem;
+    margin-bottom: 0.6rem;
+    color: var(--fg);
+  }
+
+  .probe-demo .table {
+    padding: 0.5rem 0.6rem;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    background: var(--surface);
+    font-size: 0.78rem;
+    overflow-x: auto;
+  }
+
+  /* chaining */
+  .probe-demo .bucket-row {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    min-height: 1.9rem;
+    white-space: nowrap;
+  }
+
+  .probe-demo .bucket {
+    display: inline-block;
+    width: 2.4rem;
+    padding: 0.2rem 0;
+    text-align: center;
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    background: var(--bg);
+    color: var(--muted);
+  }
+
+  .probe-demo .node {
+    display: inline-block;
+    padding: 0.2rem 0.5rem;
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    background: var(--bg);
+    color: var(--fg);
+  }
+
+  .probe-demo .arrow {
+    color: var(--muted);
+  }
+
+  /* linear */
+  .probe-demo .slots {
+    display: grid;
+    grid-template-columns: repeat(16, 1fr);
+    gap: 2px;
+  }
+
+  @media (max-width: 34rem) {
+    .probe-demo .slots {
+      grid-template-columns: repeat(8, 1fr);
+    }
+  }
+
+  .probe-demo .slot {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 0;
+    padding: 0.2rem 0 0.25rem;
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    background: var(--bg);
+    line-height: 1.25;
+  }
+
+  .probe-demo .slot .idx {
+    font-size: 0.6rem;
+    color: var(--muted);
+  }
+
+  .probe-demo .slot .k {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.68rem;
+    color: var(--fg);
+  }
+
+  .probe-demo .slot.empty .k {
+    color: var(--muted);
+  }
+
+  .probe-demo .slot.tomb {
+    background: repeating-linear-gradient(135deg, transparent 0 3px, var(--rule) 3px 4px);
+  }
+
+  /* marks */
+  .probe-demo .probe {
+    border-color: var(--muted);
+    background: color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+
+  .probe-demo .hit {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 22%, var(--bg));
+  }
+
+  .probe-demo .stop {
+    border-style: dashed;
+    border-color: var(--fg);
+  }
+
+  .probe-demo .status {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 0.4rem 1rem;
+    margin-top: 0.6rem;
+  }
+
+  .probe-demo .status strong {
+    color: var(--fg);
+  }
+</style>

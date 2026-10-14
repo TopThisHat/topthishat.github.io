@@ -1,0 +1,586 @@
+---
+// Simulated in the browser: how many memory touches a miss costs at each load
+// factor, for linear probing, CPython's perturbed probing, and Swiss groups.
+interface Props {
+  caption?: string;
+}
+const { caption } = Astro.props;
+---
+
+<figure class="lf" data-load-factor>
+  <div class="head">
+    <label>
+      <span class="meta">load factor α = <strong data-alpha-label>0.50</strong></span>
+      <input type="range" min="5" max="95" step="5" value="50" data-alpha />
+    </label>
+    <div class="readouts" data-readouts></div>
+  </div>
+  <div class="pictures" data-pictures>
+    <div class="meta">a 256-slot table at this load, with one missed lookup's probe path marked</div>
+  </div>
+  <div class="chart" data-chart></div>
+  <div class="foot meta">
+    <span class="legend">
+      <i class="line s1"></i>linear probing <i class="line s2"></i>CPython perturb probing <i class="line s3"></i>Swiss groups of 16
+    </span>
+    <details>
+      <summary>table</summary>
+      <table data-table></table>
+    </details>
+  </div>
+  {caption && <figcaption>{caption}</figcaption>}
+</figure>
+
+<script>
+  // One table of 2^14 slots, filled with random hashes to each load factor, then
+  // probed for keys that are not there. "Touches" = slots inspected for linear
+  // and perturbed probing (each one is a potential cache line at scale), and
+  // 16-wide groups inspected for Swiss.
+  const SLOTS = 1 << 14;
+  const MASK = SLOTS - 1;
+  const GROUP = 16;
+  const ALPHAS = Array.from({ length: 19 }, (_, i) => (i + 1) * 0.05);
+  const LOOKUPS = 4000;
+
+  let seed = 0x2545f491;
+  function rnd(): number {
+    // xorshift32
+    seed ^= seed << 13;
+    seed ^= seed >>> 17;
+    seed ^= seed << 5;
+    return seed >>> 0;
+  }
+
+  type Row = { alpha: number; linear: number; perturb: number; swiss: number; swissCompares: number };
+
+  function simulate(alpha: number): Row {
+    const n = Math.round(SLOTS * alpha);
+    // Linear probing table and Swiss table share the same keys and the same
+    // "home" slot (hash & MASK); the perturbed table uses CPython's recurrence.
+    const linear = new Uint8Array(SLOTS);
+    const perturbT = new Uint8Array(SLOTS);
+    const ctrl = new Uint8Array(SLOTS).fill(0x80);
+    for (let k = 0; k < n; k++) {
+      const h = rnd();
+      // linear
+      let i = h & MASK;
+      while (linear[i]) i = (i + 1) & MASK;
+      linear[i] = 1;
+      // perturb (CPython): i = (i*5 + perturb + 1) & mask; perturb >>= 5
+      let p = h;
+      i = h & MASK;
+      while (perturbT[i]) {
+        p >>>= 5;
+        i = (i * 5 + p + 1) & MASK;
+      }
+      perturbT[i] = 1;
+      // swiss: triangular probing by groups, first free slot in the group
+      let pos = (h >>> 7) & MASK;
+      let stride = 0;
+      for (;;) {
+        let placed = false;
+        for (let j = 0; j < GROUP; j++) {
+          const s = (pos + j) & MASK;
+          if (ctrl[s] === 0x80) {
+            ctrl[s] = h & 0x7f;
+            placed = true;
+            break;
+          }
+        }
+        if (placed) break;
+        stride += GROUP;
+        pos = (pos + stride) & MASK;
+      }
+    }
+    let tl = 0;
+    let tp = 0;
+    let ts = 0;
+    let tc = 0;
+    for (let q = 0; q < LOOKUPS; q++) {
+      const h = rnd();
+      let i = h & MASK;
+      let c = 1;
+      while (linear[i]) {
+        i = (i + 1) & MASK;
+        c++;
+      }
+      tl += c;
+      let p = h;
+      i = h & MASK;
+      c = 1;
+      while (perturbT[i]) {
+        p >>>= 5;
+        i = (i * 5 + p + 1) & MASK;
+        c++;
+      }
+      tp += c;
+      let pos = (h >>> 7) & MASK;
+      let stride = 0;
+      let groups = 0;
+      for (;;) {
+        groups++;
+        let hasEmpty = false;
+        for (let j = 0; j < GROUP; j++) {
+          const b = ctrl[(pos + j) & MASK];
+          if (b === 0x80) hasEmpty = true;
+          else if (b === (h & 0x7f)) tc++; // a false candidate: the key is not here
+        }
+        if (hasEmpty) break;
+        stride += GROUP;
+        pos = (pos + stride) & MASK;
+      }
+      ts += groups;
+    }
+    return { alpha, linear: tl / LOOKUPS, perturb: tp / LOOKUPS, swiss: ts / LOOKUPS, swissCompares: tc / LOOKUPS };
+  }
+
+  const fmt = (x: number) => (x >= 100 ? x.toFixed(0) : x >= 10 ? x.toFixed(1) : x.toFixed(2));
+
+  // A small table drawn as 256 cells, one row of 64 per cache line of slots,
+  // for each probing scheme, plus the path one missed lookup takes through it.
+  const PIC = 256;
+  function picture(alpha: number) {
+    let s = 0x9e3779b9 ^ Math.round(alpha * 1000);
+    const r = () => {
+      s ^= s << 13;
+      s ^= s >>> 17;
+      s ^= s << 5;
+      return s >>> 0;
+    };
+    const n = Math.round(PIC * alpha);
+    const linear = new Uint8Array(PIC);
+    const perturb = new Uint8Array(PIC);
+    const swiss = new Uint8Array(PIC);
+    const m = PIC - 1;
+    for (let k = 0; k < n; k++) {
+      const h = r();
+      let i = h & m;
+      while (linear[i]) i = (i + 1) & m;
+      linear[i] = 1;
+      let p = h;
+      i = h & m;
+      while (perturb[i]) {
+        p >>>= 5;
+        i = (i * 5 + p + 1) & m;
+      }
+      perturb[i] = 1;
+      let pos = (h >>> 7) & m;
+      let stride = 0;
+      for (;;) {
+        let placed = false;
+        for (let j = 0; j < GROUP; j++) {
+          const q = (pos + j) & m;
+          if (!swiss[q]) {
+            swiss[q] = 1;
+            placed = true;
+            break;
+          }
+        }
+        if (placed) break;
+        stride += GROUP;
+        pos = (pos + stride) & m;
+      }
+    }
+    // one miss, same hash for all three
+    const h = r();
+    const pathL: number[] = [];
+    let i = h & m;
+    while (linear[i]) {
+      pathL.push(i);
+      i = (i + 1) & m;
+    }
+    pathL.push(i);
+    const pathP: number[] = [];
+    let p = h;
+    i = h & m;
+    while (perturb[i]) {
+      pathP.push(i);
+      p >>>= 5;
+      i = (i * 5 + p + 1) & m;
+    }
+    pathP.push(i);
+    const pathS: number[] = [];
+    let pos = (h >>> 7) & m;
+    let stride = 0;
+    for (;;) {
+      let hasEmpty = false;
+      for (let j = 0; j < GROUP; j++) {
+        const q = (pos + j) & m;
+        pathS.push(q);
+        if (!swiss[q]) hasEmpty = true;
+      }
+      if (hasEmpty) break;
+      stride += GROUP;
+      pos = (pos + stride) & m;
+    }
+    return [
+      { name: 'linear probing', cls: 's1', table: linear, path: pathL, unit: 'slots' },
+      { name: 'CPython perturb probing', cls: 's2', table: perturb, path: pathP, unit: 'slots' },
+      { name: 'Swiss groups of 16', cls: 's3', table: swiss, path: pathS, unit: 'groups', groups: pathS.length / GROUP },
+    ];
+  }
+
+  for (const root of document.querySelectorAll<HTMLElement>('[data-load-factor]')) {
+    const rows = ALPHAS.map(simulate);
+    const slider = root.querySelector<HTMLInputElement>('[data-alpha]')!;
+    const label = root.querySelector<HTMLElement>('[data-alpha-label]')!;
+    const readouts = root.querySelector<HTMLElement>('[data-readouts]')!;
+    const chart = root.querySelector<HTMLElement>('[data-chart]')!;
+    const table = root.querySelector<HTMLTableElement>('[data-table]')!;
+    const pictures = root.querySelector<HTMLElement>('[data-pictures]')!;
+    const picEls = picture(0.5).map((p) => {
+      const wrap = document.createElement('div');
+      wrap.className = 'pic';
+      const head = document.createElement('div');
+      head.className = 'pic-head meta';
+      head.innerHTML = `<i class="line ${p.cls}"></i><span class="pic-name"></span> <span class="pic-note"></span>`;
+      head.querySelector('.pic-name')!.textContent = p.name;
+      const grid = document.createElement('div');
+      grid.className = 'pic-grid';
+      for (let i = 0; i < PIC; i++) grid.append(document.createElement('i'));
+      wrap.append(head, grid);
+      pictures.append(wrap);
+      return { wrap, grid, note: head.querySelector<HTMLElement>('.pic-note')! };
+    });
+
+    function drawPictures(alpha: number) {
+      picture(alpha).forEach((p, k) => {
+        const cells = picEls[k].grid.children;
+        const onPath = new Set(p.path);
+        for (let i = 0; i < PIC; i++) {
+          const c = cells[i] as HTMLElement;
+          c.className = (p.table[i] ? 'full' : 'empty') + (onPath.has(i) ? ' path' : '');
+        }
+        picEls[k].note.textContent =
+          p.unit === 'groups' ? `this miss read ${p.groups} group${p.groups === 1 ? '' : 's'} (${p.path.length} control bytes)` : `this miss read ${p.path.length} slot${p.path.length === 1 ? '' : 's'}`;
+      });
+    }
+
+    // Table view.
+    table.innerHTML =
+      '<thead><tr><th>α</th><th>linear</th><th>perturb</th><th>swiss groups</th><th>swiss false candidates</th></tr></thead><tbody>' +
+      rows
+        .map(
+          (r) =>
+            `<tr><td>${r.alpha.toFixed(2)}</td><td>${fmt(r.linear)}</td><td>${fmt(r.perturb)}</td><td>${fmt(r.swiss)}</td><td>${fmt(r.swissCompares)}</td></tr>`,
+        )
+        .join('') +
+      '</tbody>';
+
+    // Chart: log y axis of touches, x = load factor.
+    const W = 640;
+    const H = 300;
+    const L = 44;
+    const R = 16;
+    const T = 28;
+    const B = 40;
+    const yMax = 64;
+    const x = (a: number) => L + ((a - 0) / 1) * (W - L - R);
+    const y = (v: number) => T + (1 - Math.log2(Math.max(v, 1)) / Math.log2(yMax)) * (H - T - B);
+    const series = [
+      { key: 'linear', cls: 's1', name: 'linear probing' },
+      { key: 'perturb', cls: 's2', name: 'perturb probing' },
+      { key: 'swiss', cls: 's3', name: 'Swiss groups' },
+    ] as const;
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', 'Memory touches per missed lookup against load factor, for three probing schemes');
+    const el = (tag: string, attrs: Record<string, string | number>, text?: string) => {
+      const e = document.createElementNS(ns, tag);
+      for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, String(v));
+      if (text !== undefined) e.textContent = text;
+      svg.append(e);
+      return e;
+    };
+    for (const v of [1, 2, 4, 8, 16, 32, 64]) {
+      el('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), class: 'grid' });
+      el('text', { x: L - 6, y: y(v) + 4, class: 'tick', 'text-anchor': 'end' }, String(v));
+    }
+    for (const a of [0, 0.25, 0.5, 0.75, 1]) {
+      el('text', { x: x(a), y: H - 18, class: 'tick', 'text-anchor': 'middle' }, a.toFixed(2));
+    }
+    el('text', { x: L, y: T - 12, class: 'tick' }, 'memory touches per missed lookup');
+    el('text', { x: W - R, y: H - 2, class: 'tick', 'text-anchor': 'end' }, 'load factor');
+    for (const s of series) {
+      const d = rows.map((r, i) => `${i ? 'L' : 'M'}${x(r.alpha).toFixed(1)},${y(r[s.key]).toFixed(1)}`).join('');
+      el('path', { d, class: `series ${s.cls}` });
+      const last = rows[rows.length - 1];
+      el('circle', { cx: x(last.alpha), cy: y(last[s.key]), r: 4, class: `dot ${s.cls}` });
+    }
+    // Direct labels at the right edge for the two that separate; the third gets a leader.
+    const last = rows[rows.length - 1];
+    const ly = (v: number) => Math.max(T + 10, y(v) - 6);
+    el('text', { x: x(0.78), y: ly(last.linear), class: 'label' }, 'linear');
+    el('text', { x: x(0.78), y: ly(last.perturb), class: 'label' }, 'perturb');
+    el('text', { x: x(0.78), y: ly(last.swiss), class: 'label' }, 'swiss');
+    const cross = el('line', { x1: x(0.5), x2: x(0.5), y1: T, y2: H - B, class: 'cross' });
+    const dots = series.map((s) => el('circle', { cx: 0, cy: 0, r: 5, class: `dot live ${s.cls}` }));
+    const sevenEighths = el('line', { x1: x(0.875), x2: x(0.875), y1: T, y2: H - B, class: 'marker' });
+    sevenEighths.setAttribute('aria-hidden', 'true');
+    el('text', { x: x(0.875) + 4, y: H - B - 6, class: 'tick' }, '7/8');
+    chart.append(svg);
+
+    function update() {
+      const a = Number(slider.value) / 100;
+      label.textContent = a.toFixed(2);
+      const r = rows.reduce((best, row) => (Math.abs(row.alpha - a) < Math.abs(best.alpha - a) ? row : best));
+      cross.setAttribute('x1', String(x(r.alpha)));
+      cross.setAttribute('x2', String(x(r.alpha)));
+      series.forEach((s, i) => {
+        dots[i].setAttribute('cx', String(x(r.alpha)));
+        dots[i].setAttribute('cy', String(y(r[s.key])));
+      });
+      drawPictures(r.alpha);
+      readouts.replaceChildren();
+      const add = (cls: string, value: string, name: string) => {
+        const d = document.createElement('div');
+        d.className = 'ro';
+        d.innerHTML = `<i class="line ${cls}"></i><strong></strong> <span class="meta"></span>`;
+        d.querySelector('strong')!.textContent = value;
+        d.querySelector('span')!.textContent = name;
+        readouts.append(d);
+      };
+      add('s1', fmt(r.linear), 'slots, linear');
+      add('s2', fmt(r.perturb), 'slots, perturb');
+      add('s3', fmt(r.swiss), `groups, swiss (+${fmt(r.swissCompares)} false candidates)`);
+      const m = document.createElement('div');
+      m.className = 'ro meta';
+      m.textContent = `memory per entry: ${(1 / r.alpha).toFixed(2)}× the slot size`;
+      readouts.append(m);
+    }
+    slider.addEventListener('input', update);
+    update();
+  }
+</script>
+
+<style>
+  .lf {
+    margin: 2.25rem 0;
+    font-family: var(--font-mono);
+    --s1: #2a78d6;
+    --s2: #e87ba4;
+    --s3: #17703a;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .lf {
+      --s1: #3987e5;
+      --s2: #d55181;
+      --s3: #008300;
+    }
+  }
+
+  .head {
+    display: grid;
+    gap: 0.6rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .head label {
+    display: grid;
+    gap: 0.2rem;
+  }
+
+  .head strong {
+    color: var(--fg);
+  }
+
+  input[type='range'] {
+    width: 100%;
+    max-width: 24rem;
+    accent-color: var(--accent);
+  }
+
+  .readouts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1.25rem;
+    font-size: 0.8rem;
+  }
+
+  .lf :global(.ro strong) {
+    font-weight: 600;
+    color: var(--fg);
+  }
+
+  .lf :global(.line) {
+    display: inline-block;
+    width: 1rem;
+    height: 0;
+    margin: 0 0.35rem 0 0;
+    vertical-align: middle;
+    border-top: 2px solid currentColor;
+  }
+
+  .legend :global(.line) {
+    margin-left: 0.6rem;
+  }
+
+  .lf :global(.line.s1) {
+    color: var(--s1);
+  }
+
+  .lf :global(.line.s2) {
+    color: var(--s2);
+  }
+
+  .lf :global(.line.s3) {
+    color: var(--s3);
+  }
+
+  .pictures {
+    display: grid;
+    gap: 0.5rem;
+    margin: 0.5rem 0 0.9rem;
+  }
+
+  .lf :global(.pic-head) {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.5rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .lf :global(.pic-name) {
+    color: var(--fg);
+  }
+
+  .lf :global(.pic-grid) {
+    display: grid;
+    grid-template-columns: repeat(64, 1fr);
+    gap: 1px;
+  }
+
+  @media (max-width: 34rem) {
+    .lf :global(.pic-grid) {
+      grid-template-columns: repeat(32, 1fr);
+    }
+  }
+
+  .lf :global(.pic-grid i) {
+    display: block;
+    aspect-ratio: 1;
+    border-radius: 1px;
+    background: var(--rule);
+  }
+
+  .lf :global(.pic-grid i.full) {
+    background: var(--muted);
+  }
+
+  .lf :global(.pic-grid i.path) {
+    background: var(--accent);
+  }
+
+  .lf :global(.pic-grid i.full.path) {
+    background: color-mix(in srgb, var(--accent) 55%, var(--fg));
+  }
+
+  .chart svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+  }
+
+  .chart :global(.grid) {
+    stroke: var(--rule);
+    stroke-width: 1;
+  }
+
+  .chart :global(.tick) {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    fill: var(--muted);
+  }
+
+  .chart :global(.label) {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    fill: var(--fg);
+  }
+
+  .chart :global(.series) {
+    fill: none;
+    stroke-width: 2;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+  }
+
+  .chart :global(.s1) {
+    stroke: var(--s1);
+  }
+
+  .chart :global(.s2) {
+    stroke: var(--s2);
+  }
+
+  .chart :global(.s3) {
+    stroke: var(--s3);
+  }
+
+  .chart :global(.dot) {
+    stroke: var(--surface);
+    stroke-width: 2;
+  }
+
+  .chart :global(.dot.s1) {
+    fill: var(--s1);
+  }
+
+  .chart :global(.dot.s2) {
+    fill: var(--s2);
+  }
+
+  .chart :global(.dot.s3) {
+    fill: var(--s3);
+  }
+
+  .chart :global(.cross) {
+    stroke: var(--fg);
+    stroke-width: 1;
+    opacity: 0.5;
+  }
+
+  .chart :global(.marker) {
+    stroke: var(--muted);
+    stroke-width: 1;
+    stroke-dasharray: 3 3;
+  }
+
+  .foot {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 0.5rem 1rem;
+    margin-top: 0.5rem;
+  }
+
+  .foot summary {
+    cursor: pointer;
+  }
+
+  .foot :global(table) {
+    margin-top: 0.5rem;
+    border-collapse: collapse;
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .foot :global(th),
+  .foot :global(td) {
+    padding: 0.15rem 0.6rem 0.15rem 0;
+    text-align: right;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  figcaption {
+    margin-top: 0.75rem;
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+</style>

@@ -1,0 +1,419 @@
+---
+// The same small table in three layouts, drawn as 64-byte cache lines, with a
+// scripted lookup for a key that is present and one that is absent. The count
+// of distinct lines read is the point of the figure.
+interface Props {
+  caption?: string;
+}
+const { caption } = Astro.props;
+
+const LINE = 64;
+type Cell = { label: string; bytes: number; kind?: 'gap' | 'ptr' | 'idx' | 'entry' | 'ctrl' | 'slot' | 'node'; id?: string };
+type Strip = { name: string; cells: Cell[] };
+type Access = { id: string; note: string };
+type Layout = { key: string; title: string; strips: Strip[]; hit: Access[]; miss: Access[] };
+
+const ptrs = (names: (string | null)[]): Cell[] =>
+  names.map((n, i) => ({ label: n ? `${i}→${n}` : `${i} ∅`, bytes: 8, kind: 'ptr', id: `b${i}` }));
+
+const layouts: Layout[] = [
+  {
+    key: 'chained',
+    title: 'chaining: bucket array of pointers, one heap node per key',
+    strips: [
+      { name: 'bucket array, 8 pointers × 8 bytes (bucket → first node)', cells: ptrs([null, 'fig', null, null, null, 'mango', 'plum', null]) },
+      {
+        name: 'heap: 32-byte nodes wherever malloc put them',
+        cells: [
+          { label: 'other data', bytes: 32, kind: 'gap' },
+          { label: 'mango → pear', bytes: 32, kind: 'node', id: 'n-mango' },
+          { label: 'other data', bytes: 64, kind: 'gap' },
+          { label: 'fig → ∅', bytes: 32, kind: 'node', id: 'n-fig' },
+          { label: 'other data', bytes: 32, kind: 'gap' },
+          { label: 'pear → ∅', bytes: 32, kind: 'node', id: 'n-pear' },
+          { label: 'other data', bytes: 32, kind: 'gap' },
+          { label: 'plum → ∅', bytes: 32, kind: 'node', id: 'n-plum' },
+          { label: 'other data', bytes: 32, kind: 'gap' },
+        ],
+      },
+    ],
+    hit: [
+      { id: 'b5', note: 'hash("pear") mod 8 = 5. Read bucket[5]: a pointer to the node for "mango"' },
+      { id: 'n-mango', note: 'Read that node. Its key is "mango", not "pear". Follow its next pointer' },
+      { id: 'n-pear', note: 'Read the next node. Key is "pear": found' },
+    ],
+    miss: [
+      { id: 'b5', note: 'hash("kiwi") mod 8 = 5. Read bucket[5]: a pointer to the node for "mango"' },
+      { id: 'n-mango', note: 'Read the node. "mango" ≠ "kiwi". Follow its next pointer' },
+      { id: 'n-pear', note: 'Read the next node. "pear" ≠ "kiwi". Its next pointer is null: not found' },
+    ],
+  },
+  {
+    key: 'indexed',
+    title: 'CPython compact dict: index array plus a dense entries array',
+    strips: [
+      {
+        name: 'indices, 16 × 4 bytes (slot → entry number; 1 byte each in small tables)',
+        cells: Array.from({ length: 16 }, (_, i) => {
+          const map: Record<number, number> = { 1: 0, 5: 3, 9: 1, 12: 2, 14: 4 };
+          return { label: i in map ? `${i}→${map[i]}` : `${i}`, bytes: 4, kind: 'idx', id: `i${i}` };
+        }),
+      },
+      {
+        name: 'entries, 24 bytes each (hash, key, value), in insertion order',
+        cells: ['fig', 'mango', 'plum', 'apple', 'pear', ''].map((k, i) => ({
+          label: k ? `${i}: ${k}` : `${i}: unused`,
+          bytes: 24,
+          kind: k ? 'entry' : 'gap',
+          id: `e${i}`,
+        })),
+      },
+    ],
+    hit: [
+      { id: 'i5', note: 'hash("pear") & 15 = 5. Read indices[5]: entry 3' },
+      { id: 'e3', note: 'Read entries[3]. Its stored hash differs ("apple"). Compute the next probe: (5·5 + perturb + 1) & 15 = 14' },
+      { id: 'i14', note: 'Read indices[14]: entry 4. In this 16-slot table it sits in the same cache line as indices[5]; in a large table it almost never does' },
+      { id: 'e4', note: 'Read entries[4]. Hash and key match "pear": found' },
+    ],
+    miss: [
+      { id: 'i5', note: 'hash("kiwi") & 15 = 5. Read indices[5]: entry 3' },
+      { id: 'e3', note: 'Read entries[3]. Hash differs. Next probe: slot 14' },
+      { id: 'i14', note: 'Read indices[14]: entry 4' },
+      { id: 'e4', note: 'Read entries[4]. Hash differs. Next probe: slot 7' },
+      { id: 'i7', note: 'Read indices[7]: empty. Not found. Every probe cost an entries read as well as an index read' },
+    ],
+  },
+  {
+    key: 'swiss',
+    title: 'Swiss table: control bytes plus a slot array at the same index',
+    strips: [
+      {
+        name: 'control bytes, 16 × 1 byte (one group)',
+        cells: Array.from({ length: 16 }, (_, i) => {
+          const tags: Record<number, string> = { 1: '2c', 5: '5a', 6: '71', 11: '19', 14: '0e' };
+          return { label: tags[i] ?? '·', bytes: 1, kind: 'ctrl', id: `c${i}` };
+        }),
+      },
+      {
+        name: 'slots, 16 × 16 bytes (key, value)',
+        cells: Array.from({ length: 16 }, (_, i) => {
+          const keys: Record<number, string> = { 1: 'fig', 5: 'mango', 6: 'plum', 11: 'pear', 14: 'apple' };
+          return { label: keys[i] ? `${i}: ${keys[i]}` : `${i}`, bytes: 16, kind: keys[i] ? 'slot' : 'gap', id: `s${i}` };
+        }),
+      },
+    ],
+    hit: [
+      { id: 'c0', note: 'h1 picks group 0. Read all 16 control bytes in one load and compare them with h2 = 0x19: one match, at slot 11' },
+      { id: 's11', note: 'Read slot 11. Key is "pear": found. Two cache lines in total' },
+    ],
+    miss: [
+      { id: 'c0', note: 'Read the 16 control bytes and compare with h2 = 0x44: no match. The group has empty bytes, so the key cannot be anywhere else. Not found after one cache line' },
+    ],
+  },
+];
+
+// Lay cells into 64-byte lines so each cell knows which line it is in.
+function lines(strip: Strip) {
+  const out: { cells: (Cell & { line: number })[] }[] = [];
+  let used = 0;
+  let line = 0;
+  for (const c of strip.cells) {
+    if (used + c.bytes > LINE && used > 0) {
+      line++;
+      used = 0;
+    }
+    if (!out[line]) out[line] = { cells: [] };
+    out[line].cells.push({ ...c, line });
+    used += c.bytes;
+  }
+  return out;
+}
+const laid = layouts.map((l) => ({ ...l, strips: l.strips.map((s) => ({ ...s, lines: lines(s) })) }));
+---
+
+<figure class="layout-compare" data-layout-compare>
+  <div class="bar">
+    <span class="meta">look up</span>
+    <button type="button" data-run="hit">"pear" (present)</button>
+    <button type="button" data-run="miss">"kiwi" (absent)</button>
+    <span class="spacer"></span>
+    <label class="meta"><input type="checkbox" data-manual /> step by step</label>
+    <button type="button" data-next class="quiet" hidden>next step</button>
+  </div>
+  <div class="columns">
+    {
+      laid.map((l) => (
+        <div class="layout" data-layout={l.key} data-hit={JSON.stringify(l.hit)} data-miss={JSON.stringify(l.miss)}>
+          <h4 class="meta">{l.title}</h4>
+          {l.strips.map((s) => (
+            <div class="strip">
+              <div class="strip-name meta">{s.name}</div>
+              {s.lines.map((ln, li) => (
+                <div class="line" data-line={`${s.name}:${li}`}>
+                  <span class="line-label meta">line {li}</span>
+                  <div class="cells">
+                    {ln.cells.map((c) => (
+                      <span class={`cell ${c.kind ?? ''}`} data-id={c.id} style={`flex: ${c.bytes} ${c.bytes} 0`} title={`${c.bytes} bytes`}>
+                        {c.label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+          <div class="count meta">
+            cache lines read: <strong data-lines>0</strong> · <span data-note>no lookup yet</span>
+          </div>
+        </div>
+      ))
+    }
+  </div>
+  {caption && <figcaption class="demo-caption">{caption}</figcaption>}
+</figure>
+
+<script>
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  for (const root of document.querySelectorAll<HTMLElement>('[data-layout-compare]')) {
+    const manual = root.querySelector<HTMLInputElement>('[data-manual]')!;
+    const nextBtn = root.querySelector<HTMLButtonElement>('[data-next]')!;
+    type Access = { id: string; note: string };
+    const layouts = [...root.querySelectorAll<HTMLElement>('[data-layout]')].map((el) => ({
+      el,
+      hit: JSON.parse(el.dataset.hit!) as Access[],
+      miss: JSON.parse(el.dataset.miss!) as Access[],
+      queue: [] as Access[],
+      n: 0,
+      lines: new Set<HTMLElement>(),
+    }));
+    let timer = 0;
+
+    function reset() {
+      clearInterval(timer);
+      timer = 0;
+      for (const l of layouts) {
+        l.queue = [];
+        l.n = 0;
+        l.lines.clear();
+        l.el.querySelectorAll('.cell').forEach((c) => {
+          c.classList.remove('hot', 'last');
+          c.removeAttribute('data-n');
+        });
+        l.el.querySelectorAll('.line').forEach((c) => c.classList.remove('read'));
+        l.el.querySelector('[data-lines]')!.textContent = '0';
+        l.el.querySelector('[data-note]')!.textContent = 'no lookup yet';
+      }
+    }
+
+    function stepOne(): boolean {
+      let advanced = false;
+      for (const l of layouts) {
+        const a = l.queue[l.n];
+        if (!a) continue;
+        advanced = true;
+        const cell = l.el.querySelector<HTMLElement>(`[data-id="${a.id}"]`)!;
+        const line = cell.closest<HTMLElement>('.line')!;
+        l.lines.add(line);
+        line.classList.add('read');
+        l.el.querySelectorAll('.cell.last').forEach((c) => c.classList.remove('last'));
+        cell.classList.add('hot', 'last');
+        cell.dataset.n = String(l.n + 1);
+        l.el.querySelector('[data-lines]')!.textContent = String(l.lines.size);
+        l.el.querySelector('[data-note]')!.textContent = a.note;
+        l.n++;
+      }
+      if (!advanced) nextBtn.hidden = true;
+      return advanced;
+    }
+
+    function run(which: 'hit' | 'miss') {
+      reset();
+      for (const l of layouts) l.queue = l[which];
+      if (manual.checked) {
+        stepOne();
+        nextBtn.hidden = false;
+      } else if (reduced) {
+        while (stepOne());
+      } else {
+        stepOne();
+        timer = window.setInterval(() => {
+          if (!stepOne()) clearInterval(timer);
+        }, 1100);
+      }
+    }
+
+    root.querySelectorAll<HTMLButtonElement>('[data-run]').forEach((b) => b.addEventListener('click', () => run(b.dataset.run as 'hit' | 'miss')));
+    nextBtn.addEventListener('click', () => stepOne());
+    reset();
+  }
+</script>
+
+<style is:global>
+  .layout-compare {
+    margin: 2.25rem 0;
+    font-family: var(--font-mono);
+  }
+
+  .layout-compare .bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .layout-compare .bar .spacer {
+    flex: 1;
+  }
+
+  .layout-compare .bar label {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  .layout-compare .bar input {
+    accent-color: var(--accent);
+    margin: 0;
+  }
+
+  .layout-compare .bar button {
+    padding: 0.4rem 0.7rem;
+    font: 500 0.8rem var(--font-mono);
+    color: var(--fg);
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .layout-compare .bar button:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .layout-compare .bar button.quiet {
+    background: transparent;
+  }
+
+  .layout-compare .columns {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.75rem;
+  }
+
+  .layout-compare .layout {
+    min-width: 0;
+    padding: 0.6rem 0.7rem 0.7rem;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    background: var(--surface);
+  }
+
+  .layout-compare h4 {
+    margin: 0 0 0.5rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--fg);
+  }
+
+  .layout-compare .strip + .strip {
+    margin-top: 0.5rem;
+  }
+
+  .layout-compare .strip-name {
+    margin-bottom: 0.25rem;
+    font-size: 0.7rem;
+  }
+
+  .layout-compare .line {
+    display: flex;
+    min-width: 0;
+    align-items: stretch;
+    gap: 0.4rem;
+    margin-bottom: 3px;
+    padding: 2px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    transition: border-color 200ms, background 200ms;
+  }
+
+  .layout-compare .line.read {
+    border-color: var(--muted);
+    background: color-mix(in srgb, var(--fg) 6%, transparent);
+  }
+
+  .layout-compare .line-label {
+    flex: 0 0 3.2rem;
+    font-size: 0.65rem;
+    line-height: 1.6rem;
+  }
+
+  .layout-compare .cells {
+    display: flex;
+    flex: 1;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .layout-compare .cell {
+    position: relative;
+    min-width: 0;
+    height: 1.6rem;
+    overflow: hidden;
+    padding: 0 0.2rem;
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    background: var(--bg);
+    font-size: 0.62rem;
+    line-height: 1.5rem;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    color: var(--fg);
+    transition: background 200ms, border-color 200ms;
+  }
+
+  .layout-compare .cell.gap {
+    color: var(--muted);
+    background: transparent;
+    border-style: dashed;
+  }
+
+  .layout-compare .cell.ctrl,
+  .layout-compare .cell.idx {
+    padding: 0;
+    text-align: center;
+  }
+
+  .layout-compare .cell.hot {
+    border-color: var(--fg);
+    background: color-mix(in srgb, var(--fg) 14%, var(--bg));
+  }
+
+  .layout-compare .cell.last {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 24%, var(--bg));
+  }
+
+  .layout-compare .cell[data-n]::after {
+    content: attr(data-n);
+    position: absolute;
+    top: 0;
+    right: 0.15rem;
+    font-size: 0.6rem;
+    font-weight: 600;
+    line-height: 1;
+    padding-top: 2px;
+    color: var(--accent);
+  }
+
+  .layout-compare .count {
+    margin-top: 0.5rem;
+    min-height: 2.2em;
+    line-height: 1.45;
+  }
+
+  .layout-compare .count strong {
+    color: var(--fg);
+  }
+</style>

@@ -1,0 +1,465 @@
+{
+ "python": "3.14.0",
+ "machine": "arm64",
+ "cpu": "Apple M1",
+ "simd": "neon",
+ "group": 16,
+ "rows": [
+  {
+   "keys": "int-seq",
+   "n": 1000,
+   "table": "dict",
+   "insert_ns": 13.0,
+   "bytes": 36952,
+   "bytes_per_item": 36.952,
+   "hit_ns": 5.342,
+   "miss_ns": 6.398,
+   "py_hit_ns": 25.541,
+   "delete_ns": 16.0,
+   "hit_after_delete_ns": 5.3875
+  },
+  {
+   "keys": "int-seq",
+   "n": 1000,
+   "table": "swiss",
+   "insert_ns": 27.0,
+   "bytes": 51296,
+   "bytes_per_item": 51.296,
+   "hit_ns": 4.4605,
+   "miss_ns": 5.614,
+   "py_hit_ns": 30.25,
+   "delete_ns": 22.0,
+   "hit_after_delete_ns": 4.274,
+   "stats": {
+    "buckets": 2048,
+    "items": 1000,
+    "tombstones": 0,
+    "growth_left": 792
+   },
+   "stats_after_delete": {
+    "buckets": 2048,
+    "items": 500,
+    "tombstones": 16,
+    "growth_left": 1276
+   }
+  },
+  {
+   "keys": "int-seq",
+   "n": 10000,
+   "table": "dict",
+   "insert_ns": 12.9,
+   "bytes": 294992,
+   "bytes_per_item": 29.4992,
+   "hit_ns": 5.629,
+   "miss_ns": 16.079,
+   "py_hit_ns": 22.5708,
+   "delete_ns": 11.0,
+   "hit_after_delete_ns": 5.5885
+  },
+  {
+   "keys": "int-seq",
+   "n": 10000,
+   "table": "swiss",
+   "insert_ns": 24.6,
+   "bytes": 409696,
+   "bytes_per_item": 40.9696,
+   "hit_ns": 5.8165,
+   "miss_ns": 6.758,
+   "py_hit_ns": 41.0375,
+   "delete_ns": 14.8,
+   "hit_after_delete_ns": 5.5895,
+   "stats": {
+    "buckets": 16384,
+    "items": 10000,
+    "tombstones": 0,
+    "growth_left": 4336
+   },
+   "stats_after_delete": {
+    "buckets": 16384,
+    "items": 5000,
+    "tombstones": 750,
+    "growth_left": 8586
+   }
+  },
+  {
+   "keys": "int-seq",
+   "n": 100000,
+   "table": "dict",
+   "insert_ns": 16.91,
+   "bytes": 5242960,
+   "bytes_per_item": 52.4296,
+   "hit_ns": 10.9335,
+   "miss_ns": 8.3575,
+   "py_hit_ns": 55.89,
+   "delete_ns": 24.78,
+   "hit_after_delete_ns": 6.5775
+  },
+  {
+   "keys": "int-seq",
+   "n": 100000,
+   "table": "swiss",
+   "insert_ns": 24.32,
+   "bytes": 3276896,
+   "bytes_per_item": 32.76896,
+   "hit_ns": 13.5825,
+   "miss_ns": 15.0565,
+   "py_hit_ns": 136.75084,
+   "delete_ns": 27.18,
+   "hit_after_delete_ns": 8.687,
+   "stats": {
+    "buckets": 131072,
+    "items": 100000,
+    "tombstones": 0,
+    "growth_left": 14688
+   },
+   "stats_after_delete": {
+    "buckets": 131072,
+    "items": 50000,
+    "tombstones": 21777,
+    "growth_left": 42911
+   }
+  },
+  {
+   "keys": "int-seq",
+   "n": 1000000,
+   "table": "dict",
+   "insert_ns": 17.292,
+   "bytes": 41943128,
+   "bytes_per_item": 41.943128,
+   "hit_ns": 52.8515,
+   "miss_ns": 34.3155,
+   "py_hit_ns": 160.329292,
+   "delete_ns": 105.582,
+   "hit_after_delete_ns": 43.0375
+  },
+  {
+   "keys": "int-seq",
+   "n": 1000000,
+   "table": "swiss",
+   "insert_ns": 40.808,
+   "bytes": 52428896,
+   "bytes_per_item": 52.428896,
+   "hit_ns": 41.1775,
+   "miss_ns": 28.6545,
+   "py_hit_ns": 338.807667,
+   "delete_ns": 84.04,
+   "hit_after_delete_ns": 42.003,
+   "stats": {
+    "buckets": 2097152,
+    "items": 1000000,
+    "tombstones": 0,
+    "growth_left": 835008
+   },
+   "stats_after_delete": {
+    "buckets": 2097152,
+    "items": 500000,
+    "tombstones": 12248,
+    "growth_left": 1322760
+   }
+  },
+  {
+   "keys": "int-rand",
+   "n": 1000,
+   "table": "dict",
+   "insert_ns": 28.0,
+   "bytes": 36952,
+   "bytes_per_item": 36.952,
+   "hit_ns": 13.3945,
+   "miss_ns": 16.936,
+   "py_hit_ns": 35.542,
+   "delete_ns": 20.0,
+   "hit_after_delete_ns": 11.191
+  },
+  {
+   "keys": "int-rand",
+   "n": 1000,
+   "table": "swiss",
+   "insert_ns": 29.0,
+   "bytes": 51296,
+   "bytes_per_item": 51.296,
+   "hit_ns": 7.2395,
+   "miss_ns": 7.3815,
+   "py_hit_ns": 43.291,
+   "delete_ns": 26.0,
+   "hit_after_delete_ns": 6.4395,
+   "stats": {
+    "buckets": 2048,
+    "items": 1000,
+    "tombstones": 0,
+    "growth_left": 792
+   },
+   "stats_after_delete": {
+    "buckets": 2048,
+    "items": 500,
+    "tombstones": 20,
+    "growth_left": 1272
+   }
+  },
+  {
+   "keys": "int-rand",
+   "n": 10000,
+   "table": "dict",
+   "insert_ns": 29.1,
+   "bytes": 294992,
+   "bytes_per_item": 29.4992,
+   "hit_ns": 19.0105,
+   "miss_ns": 24.864,
+   "py_hit_ns": 35.7708,
+   "delete_ns": 17.8,
+   "hit_after_delete_ns": 19.3125
+  },
+  {
+   "keys": "int-rand",
+   "n": 10000,
+   "table": "swiss",
+   "insert_ns": 28.0,
+   "bytes": 409696,
+   "bytes_per_item": 40.9696,
+   "hit_ns": 8.3415,
+   "miss_ns": 9.3575,
+   "py_hit_ns": 49.3291,
+   "delete_ns": 18.2,
+   "hit_after_delete_ns": 8.179,
+   "stats": {
+    "buckets": 16384,
+    "items": 10000,
+    "tombstones": 0,
+    "growth_left": 4336
+   },
+   "stats_after_delete": {
+    "buckets": 16384,
+    "items": 5000,
+    "tombstones": 744,
+    "growth_left": 8592
+   }
+  },
+  {
+   "keys": "int-rand",
+   "n": 100000,
+   "table": "dict",
+   "insert_ns": 39.94,
+   "bytes": 5242960,
+   "bytes_per_item": 52.4296,
+   "hit_ns": 34.486,
+   "miss_ns": 44.3065,
+   "py_hit_ns": 103.51083,
+   "delete_ns": 52.98,
+   "hit_after_delete_ns": 23.986
+  },
+  {
+   "keys": "int-rand",
+   "n": 100000,
+   "table": "swiss",
+   "insert_ns": 28.87,
+   "bytes": 3276896,
+   "bytes_per_item": 32.76896,
+   "hit_ns": 29.2895,
+   "miss_ns": 23.6325,
+   "py_hit_ns": 149.55708,
+   "delete_ns": 44.56,
+   "hit_after_delete_ns": 14.891,
+   "stats": {
+    "buckets": 131072,
+    "items": 100000,
+    "tombstones": 0,
+    "growth_left": 14688
+   },
+   "stats_after_delete": {
+    "buckets": 131072,
+    "items": 50000,
+    "tombstones": 22085,
+    "growth_left": 42603
+   }
+  },
+  {
+   "keys": "int-rand",
+   "n": 1000000,
+   "table": "dict",
+   "insert_ns": 77.9,
+   "bytes": 41943128,
+   "bytes_per_item": 41.943128,
+   "hit_ns": 102.0595,
+   "miss_ns": 93.136,
+   "py_hit_ns": 219.177583,
+   "delete_ns": 147.654,
+   "hit_after_delete_ns": 97.1585
+  },
+  {
+   "keys": "int-rand",
+   "n": 1000000,
+   "table": "swiss",
+   "insert_ns": 46.577,
+   "bytes": 52428896,
+   "bytes_per_item": 52.428896,
+   "hit_ns": 58.2215,
+   "miss_ns": 39.475,
+   "py_hit_ns": 322.002208,
+   "delete_ns": 116.368,
+   "hit_after_delete_ns": 60.2445,
+   "stats": {
+    "buckets": 2097152,
+    "items": 1000000,
+    "tombstones": 0,
+    "growth_left": 835008
+   },
+   "stats_after_delete": {
+    "buckets": 2097152,
+    "items": 500000,
+    "tombstones": 12140,
+    "growth_left": 1322868
+   }
+  },
+  {
+   "keys": "str",
+   "n": 1000,
+   "table": "dict",
+   "insert_ns": 24.0,
+   "bytes": 26032,
+   "bytes_per_item": 26.032,
+   "hit_ns": 10.895,
+   "miss_ns": 13.407,
+   "py_hit_ns": 32.375,
+   "delete_ns": 18.0,
+   "hit_after_delete_ns": 9.487
+  },
+  {
+   "keys": "str",
+   "n": 1000,
+   "table": "swiss",
+   "insert_ns": 27.0,
+   "bytes": 51296,
+   "bytes_per_item": 51.296,
+   "hit_ns": 4.9865,
+   "miss_ns": 5.498,
+   "py_hit_ns": 39.916,
+   "delete_ns": 20.0,
+   "hit_after_delete_ns": 4.5185,
+   "stats": {
+    "buckets": 2048,
+    "items": 1000,
+    "tombstones": 0,
+    "growth_left": 792
+   },
+   "stats_after_delete": {
+    "buckets": 2048,
+    "items": 500,
+    "tombstones": 4,
+    "growth_left": 1288
+   }
+  },
+  {
+   "keys": "str",
+   "n": 10000,
+   "table": "dict",
+   "insert_ns": 30.2,
+   "bytes": 207616,
+   "bytes_per_item": 20.7616,
+   "hit_ns": 18.553,
+   "miss_ns": 24.71,
+   "py_hit_ns": 41.2459,
+   "delete_ns": 17.6,
+   "hit_after_delete_ns": 16.356
+  },
+  {
+   "keys": "str",
+   "n": 10000,
+   "table": "swiss",
+   "insert_ns": 27.3,
+   "bytes": 409696,
+   "bytes_per_item": 40.9696,
+   "hit_ns": 5.6495,
+   "miss_ns": 6.7685,
+   "py_hit_ns": 54.8417,
+   "delete_ns": 15.6,
+   "hit_after_delete_ns": 5.5605,
+   "stats": {
+    "buckets": 16384,
+    "items": 10000,
+    "tombstones": 0,
+    "growth_left": 4336
+   },
+   "stats_after_delete": {
+    "buckets": 16384,
+    "items": 5000,
+    "tombstones": 704,
+    "growth_left": 8632
+   }
+  },
+  {
+   "keys": "str",
+   "n": 100000,
+   "table": "dict",
+   "insert_ns": 99.12,
+   "bytes": 3844864,
+   "bytes_per_item": 38.44864,
+   "hit_ns": 50.799,
+   "miss_ns": 65.8295,
+   "py_hit_ns": 136.55333,
+   "delete_ns": 51.54,
+   "hit_after_delete_ns": 28.868
+  },
+  {
+   "keys": "str",
+   "n": 100000,
+   "table": "swiss",
+   "insert_ns": 55.88,
+   "bytes": 3276896,
+   "bytes_per_item": 32.76896,
+   "hit_ns": 26.175,
+   "miss_ns": 25.021,
+   "py_hit_ns": 150.2025,
+   "delete_ns": 47.12,
+   "hit_after_delete_ns": 16.4335,
+   "stats": {
+    "buckets": 131072,
+    "items": 100000,
+    "tombstones": 0,
+    "growth_left": 14688
+   },
+   "stats_after_delete": {
+    "buckets": 131072,
+    "items": 50000,
+    "tombstones": 22300,
+    "growth_left": 42388
+   }
+  },
+  {
+   "keys": "str",
+   "n": 1000000,
+   "table": "dict",
+   "insert_ns": 142.464,
+   "bytes": 30758320,
+   "bytes_per_item": 30.75832,
+   "hit_ns": 101.7775,
+   "miss_ns": 117.1185,
+   "py_hit_ns": 243.737584,
+   "delete_ns": 141.008,
+   "hit_after_delete_ns": 96.762
+  },
+  {
+   "keys": "str",
+   "n": 1000000,
+   "table": "swiss",
+   "insert_ns": 79.766,
+   "bytes": 52428896,
+   "bytes_per_item": 52.428896,
+   "hit_ns": 43.131,
+   "miss_ns": 29.7455,
+   "py_hit_ns": 317.831833,
+   "delete_ns": 90.544,
+   "hit_after_delete_ns": 43.6065,
+   "stats": {
+    "buckets": 2097152,
+    "items": 1000000,
+    "tombstones": 0,
+    "growth_left": 835008
+   },
+   "stats_after_delete": {
+    "buckets": 2097152,
+    "items": 500000,
+    "tombstones": 12478,
+    "growth_left": 1322530
+   }
+  }
+ ]
+}

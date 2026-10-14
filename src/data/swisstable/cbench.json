@@ -1,0 +1,125 @@
+{
+ "cpu": "Apple M1",
+ "rows": [
+  {
+   "table": "chained",
+   "n": 1000,
+   "hit_ns": 1.4,
+   "miss_ns": 1.23,
+   "dep_hit_ns": 12.42,
+   "bytes_per_item": 40.2
+  },
+  {
+   "table": "indexed",
+   "n": 1000,
+   "hit_ns": 1.88,
+   "miss_ns": 1.71,
+   "dep_hit_ns": 13.11,
+   "bytes_per_item": 41.0
+  },
+  {
+   "table": "swiss",
+   "n": 1000,
+   "hit_ns": 2.1,
+   "miss_ns": 2.18,
+   "dep_hit_ns": 17.78,
+   "bytes_per_item": 34.8
+  },
+  {
+   "table": "chained",
+   "n": 10000,
+   "hit_ns": 3.2,
+   "miss_ns": 2.97,
+   "dep_hit_ns": 12.83,
+   "bytes_per_item": 45.1
+  },
+  {
+   "table": "indexed",
+   "n": 10000,
+   "hit_ns": 7.11,
+   "miss_ns": 9.07,
+   "dep_hit_ns": 13.61,
+   "bytes_per_item": 32.8
+  },
+  {
+   "table": "swiss",
+   "n": 10000,
+   "hit_ns": 2.27,
+   "miss_ns": 2.84,
+   "dep_hit_ns": 17.45,
+   "bytes_per_item": 27.9
+  },
+  {
+   "table": "chained",
+   "n": 100000,
+   "hit_ns": 6.92,
+   "miss_ns": 9.52,
+   "dep_hit_ns": 14.87,
+   "bytes_per_item": 42.5
+  },
+  {
+   "table": "indexed",
+   "n": 100000,
+   "hit_ns": 6.4,
+   "miss_ns": 8.95,
+   "dep_hit_ns": 15.96,
+   "bytes_per_item": 52.4
+  },
+  {
+   "table": "swiss",
+   "n": 100000,
+   "hit_ns": 2.86,
+   "miss_ns": 6.84,
+   "dep_hit_ns": 18.39,
+   "bytes_per_item": 22.3
+  },
+  {
+   "table": "chained",
+   "n": 1000000,
+   "hit_ns": 15.35,
+   "miss_ns": 20.65,
+   "dep_hit_ns": 23.94,
+   "bytes_per_item": 40.4
+  },
+  {
+   "table": "indexed",
+   "n": 1000000,
+   "hit_ns": 17.1,
+   "miss_ns": 21.25,
+   "dep_hit_ns": 24.79,
+   "bytes_per_item": 41.9
+  },
+  {
+   "table": "swiss",
+   "n": 1000000,
+   "hit_ns": 8.69,
+   "miss_ns": 3.72,
+   "dep_hit_ns": 24.62,
+   "bytes_per_item": 35.7
+  },
+  {
+   "table": "chained",
+   "n": 10000000,
+   "hit_ns": 17.97,
+   "miss_ns": 20.28,
+   "dep_hit_ns": 59.42,
+   "bytes_per_item": 45.4
+  },
+  {
+   "table": "indexed",
+   "n": 10000000,
+   "hit_ns": 33.64,
+   "miss_ns": 46.08,
+   "dep_hit_ns": 57.63,
+   "bytes_per_item": 33.6
+  },
+  {
+   "table": "swiss",
+   "n": 10000000,
+   "hit_ns": 20.02,
+   "miss_ns": 8.78,
+   "dep_hit_ns": 55.57,
+   "bytes_per_item": 28.5
+  }
+ ]
+}

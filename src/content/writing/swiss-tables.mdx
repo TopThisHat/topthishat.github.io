@@ -1,0 +1,262 @@
+---
+title: Sixteen Slots at a Time
+description: How Swiss tables work, from Matt Kulukundis's CppCon talk to Go 1.24's map, with step-through demos, a Swiss-table mapping for CPython, and benchmarks.
+pubDate: 2026-10-14
+tags: [algorithms, performance, python, go]
+draft: false
+---
+import ProbeDemo from '../../components/swiss/ProbeDemo.astro';
+import SwissProbe from '../../components/swiss/SwissProbe.astro';
+import LayoutCompare from '../../components/swiss/LayoutCompare.astro';
+import LoadFactorExplorer from '../../components/swiss/LoadFactorExplorer.astro';
+import GoDirectory from '../../components/swiss/GoDirectory.astro';
+import BenchChart from '../../components/swiss/BenchChart.astro';
+import { cPanels, cMemoryPanel, pythonPanels, goPanels, meta } from '../../lib/swisstable';
+
+At CppCon 2017, Matt Kulukundis gave a talk called "Designing a Fast, Efficient, Cache-friendly Hash Table, Step by Step".[^talk] He opened with two numbers: about 1% of the CPU time across Google's fleet and more than 4% of its memory were spent inside C++ hash tables. The rest of the talk builds a new table from `std::unordered_set` one change at a time, measuring as it goes. The result was known internally as the Swiss Table, after the Zurich office where much of the work was done, and was released as `absl::flat_hash_map` in 2018.[^absl]
+
+The design has since spread. Rust's `hashbrown` is a port of it and has been the standard library `HashMap` since 2019. Go 1.24, released in February 2025, replaced its built-in map with a Swiss table; the Go blog reports microbenchmarks up to 60% faster than Go 1.23 and about 1.5% less CPU time across whole applications.[^goblog]
+
+This post goes through the design from the beginning, with a small table to operate on in each section, and ends with measurements: the three layouts written in C, a Swiss-table mapping for CPython against the built-in `dict`, and Go's old map against its new one. Replacing `dict` inside the interpreter was not practical, for reasons covered below, so the Python comparison is a C extension with the same hashing and comparison rules as `dict`, timed from C.
+
+## What a lookup costs
+
+A hash table stores key-value pairs in an array. To find a key, it runs the key through a hash function, which turns it into a number, and uses that number to pick an array position. If every key landed in its own position, a lookup would be one array read. Two keys can land in the same position, though, and hash table designs differ mainly in how they handle that.
+
+On current hardware, the cost of a lookup is mostly the number of separate places in memory it reads. A CPU reads memory in 64-byte units called cache lines. Reading a line that is already in the CPU's cache takes a few nanoseconds. Reading one that is not takes on the order of a hundred nanoseconds, during which the CPU can execute hundreds of instructions. For a table too large to fit in cache, a lookup's cost is close to the number of distinct cache lines it touches, and the instructions in between add little.
+
+Each demo below counts memory reads.
+
+## Chaining
+
+The simplest way to handle two keys in the same position is to keep a list at each position. The array holds pointers to the first node of each list, each node holds a key, a value, and a pointer to the next node, and a lookup walks the list. This is called chaining, and it is what `std::unordered_map` does. The C++ standard more or less requires it, because the standard guarantees that references to elements stay valid when other elements are inserted, and that is easy to promise when every element is its own heap allocation.
+
+The table below has eight buckets. Look up a key, then insert a few and look them up again.
+
+<ProbeDemo mode="chaining" caption="Chaining. Each bucket is a pointer to the first node of a list. A lookup reads the bucket, then one node per step along the list. Every read is a separate location in memory." />
+
+A lookup reads the bucket array once, then one node per step along the chain. A node is wherever the allocator put it, so each of those reads is usually a different cache line. Matt's count for `std::unordered_set` was four memory accesses for a typical `find`.[^talk] Even a miss on an empty bucket has to read the bucket first, and a miss on a non-empty bucket walks the whole chain.
+
+There is also a memory cost. Each node carries a pointer to the next node (8 bytes), and most implementations also store the key's hash in the node (8 more bytes) so that a resize does not have to rehash.
+
+## Open addressing
+
+The alternative is to keep everything in one array with no lists. When a key's position is taken, look at another position according to some rule, and keep going until you find a free slot. The sequence of positions is called the probe sequence. The simplest rule, linear probing, is to try the next slot. Lookups follow the same sequence: step along until you find the key or an empty slot. An empty slot means the key is not present, because an insert would have used that slot.
+
+<ProbeDemo mode="linear" caption="Linear probing. All keys live in one array. A collision moves to the next slot. A lookup stops at the key or at the first empty slot. Deleting a key leaves a tombstone, a marker that says 'keep probing'." />
+
+The reads are now adjacent. Consecutive slots are usually in the same cache line, so a short probe sequence is cheap even when it is several slots long. Deletion is awkward, though. If you delete a key by emptying its slot, a lookup for a key that was placed further along the same probe sequence will stop at the new gap and report a miss. The fix is a tombstone: a marker that says "a key was here, keep going". Tombstones take up space without storing anything, and a table that sees a lot of deletes fills with them until it is rebuilt.
+
+Google had a table like this before the Swiss Table, `dense_hash_map`. It had one more awkwardness: with no spare bytes per slot to mark a slot as empty or deleted, it reserved two key values, one meaning empty and one meaning deleted, and the user had to supply them. That rules out storing those two keys and is easy to get wrong.
+
+## The load factor
+
+The load factor is the fraction of slots in use. It controls both memory and speed. At a low load factor, most of the array is empty and most lookups end in one or two slots. At a high load factor, the runs of occupied slots grow, and a lookup for a missing key may walk a long way before it meets an empty slot. For linear probing the growth is steep. At 50% load an unsuccessful lookup inspects about 2.5 slots on average; at 90% it inspects about 50.[^knuth]
+
+CPython's `dict` uses a different probe rule to avoid those runs. Instead of stepping to the next slot it jumps to `(5·i + perturb + 1) mod size`, where `perturb` starts as the full hash and is shifted right by five bits on each step. Consecutive probes land far apart, so runs of adjacent occupied slots do not form, and the sequence still visits every slot eventually. The cost is that each probe is now a separate cache line.
+
+The figure below simulates both, plus the Swiss approach from the next section. Move the slider and watch how a single missed lookup behaves, then look at the chart for the averages. The three tables are filled with the same random hashes and probed with the same missing key.
+
+<LoadFactorExplorer caption="Runs in your browser. Top: a 256-slot table at the chosen load, gray for occupied slots, green for the slots or control bytes one missed lookup reads. Bottom: the average cost of a miss in a 16,384-slot table, over 4,000 random misses. Linear and perturbed probing count slots inspected; Swiss counts groups of 16. The dashed line is the 7/8 load factor Swiss tables use." />
+
+The picture for linear probing shows why it is kept half empty in practice: the occupied slots form long runs, and a miss that starts in a run has to walk to its end. The perturbed probe has no runs, but each jump is a separate location, and at two-thirds load a miss averages about three of them. The Swiss line stays near one group all the way to 7/8 load.
+
+Load factor also sets memory use. If the table is 50% full, the array is twice the size of the data in it. At 7/8 full, the overhead is one seventh. A table that can run at 7/8 without slowing down uses close to half the memory of one that has to stay at 50%.
+
+## The Swiss table
+
+The Swiss table is open addressing with three additions.
+
+The first addition is one byte of metadata per slot, kept in a separate array of control bytes. The top bit of the byte says whether the slot is special: `0x80` means empty, `0xFE` means deleted. If the top bit is clear, the slot holds a key, and the low seven bits of the byte hold a fragment of that key's hash, which this post calls the tag. The talk credits the "just use a whole byte" suggestion to Sanjay Ghemawat and Jeff Dean; earlier drafts had tried to get by with fewer bits per slot.[^talk]
+
+The second is that the hash is split in two. The low seven bits are called `h2`, and they are the tag written into the control byte. The remaining bits are called `h1` and choose where probing starts. A lookup compares its `h2` against the control bytes and rules out most slots without reading the slot itself. For a slot that holds some other key, the control byte matches by chance one time in 128.
+
+The third is that slots are probed sixteen at a time. The control bytes are read in groups of sixteen, which is one 128-bit SIMD register and, usually, one cache line. On x86, `_mm_set1_epi8` fills a register with sixteen copies of `h2`, `_mm_cmpeq_epi8` compares it byte by byte against the sixteen control bytes, and `_mm_movemask_epi8` turns the result into a 16-bit integer with a one for each match. Three instructions tell you which of the sixteen slots are worth reading.
+
+A lookup is then:
+
+1. Compute the hash. Split it into `h1` and `h2`. Use `h1` to pick the starting group.
+2. Load the group's sixteen control bytes. Compare all of them with `h2`. The result is a 16-bit mask.
+3. For each set bit in the mask, read that slot and compare the full key. If it matches, done.
+4. If no candidate matched, check whether the group contains an empty byte. If it does, the key is not in the table, because an insert would have used that empty slot or an earlier one. If the group has no empty byte, move to another group and repeat. Abseil, and the code behind this post, step by a growing stride, one group, then two, then three, which visits every group once in a power-of-two table.
+
+The table below has 32 slots in two groups. Look up `pear` with "step by step" checked and follow the four steps. The two prefilled keys that share a group and a tag are there so you can see step 3 reject a candidate.
+
+<SwissProbe caption="A 32-slot Swiss table. The hash is shown in binary with h1 and h2 marked. The compare panel shows each control byte against h2 with a tick or cross, and the resulting mask. Candidates are outlined; the slot that is read is filled in. A dashed outline marks the empty byte that ends a miss." />
+
+A miss that finds an empty byte in its first group has read one cache line and no slots. A hit has read the control bytes and, almost always, one slot. The sixteen-way compare costs the same whether zero or sixteen bytes match. Because a probe step covers sixteen slots, the table can be nearly full before a lookup needs a second step; the chart in the previous section shows the average staying close to one group up to 7/8 load, which is the default maximum in Abseil, Rust, and Go.
+
+The machine this post was benchmarked on is an Apple M1, which has no SSE2. ARM's NEON has the same byte compare, but no instruction that collects the top bit of each byte into an integer. The usual replacement, described by Danila Kutenin,[^neon] narrows each 16-bit lane to four bits, which gives a 64-bit integer with four bits per slot:
+
+```c title="swissdict.c"
+static inline uint64_t neon_movemask(uint8x16_t cmp) {
+    uint8x8_t narrowed = vshrn_n_u16(vreinterpretq_u16_u8(cmp), 4);
+    return vget_lane_u64(vreinterpret_u64_u8(narrowed), 0);
+}
+
+static inline uint64_t group_match(uint8x16_t g, uint8_t h2) {
+    return neon_movemask(vceqq_u8(g, vdupq_n_u8(h2)));
+}
+
+static inline uint64_t group_match_empty_or_deleted(uint8x16_t g) {
+    /* both special values have the top bit set; tags never do */
+    return neon_movemask(vcltzq_s8(vreinterpretq_s8_u8(g)));
+}
+```
+
+Finding the first match is a count-trailing-zeros divided by four. Go's implementation does not use SIMD at all. It uses groups of eight, keeps the eight control bytes in a 64-bit integer, and does the byte-wise compare with ordinary integer arithmetic, which works on every architecture and still checks eight slots per step.[^goblog] The sixteen in this post's title is the Abseil number.
+
+### The hash function
+
+The split into `h1` and `h2` only works if the hash has entropy in every bit. CPython's `hash(int)` is the integer itself. If that were used directly, the keys 0 to 127 would have `h2` equal to the key and `h1` equal to zero, so all of them would start in the same group with distinct tags, and the next 128 would do the same in the next group. The table would behave like a linked list. The talk's benchmark of a deliberately poor hash function, a 10-bit shift, came out about 25 times slower than a good one, and Abseil ships `absl::Hash` with the tables for this reason.[^talk]
+
+My CPython extension runs every hash through a 64-bit mixing function before splitting it. The built-in `dict` does not need to, because its perturbed probe sequence was designed for identity hashes. That is a few cycles the Swiss version spends that `dict` does not, and it is visible in the sequential-integer benchmark later.
+
+## Deleting
+
+The Swiss design avoids most tombstones. A lookup moves on to another group only if the group it loaded had no empty byte. So consider deleting the key in slot `i`, and look at every sixteen-byte window that contains `i`. If each of those windows also contains an empty byte, then any lookup that loaded one of them stopped there, and no lookup has ever probed past `i`. The slot can go straight back to empty without cutting a later key's probe sequence short. Only if some window through `i` is sixteen non-empty bytes long, which is to say the run of non-empty bytes around `i` is at least a group long, does the slot become a tombstone.
+
+In code, it is the length of that run, found by counting leading and trailing zeros on two masks of empty bytes. The masks match empty bytes only, not tombstones, since a tombstone does not stop a lookup. The two counts are in slots: on NEON, where the mask has four bits per slot, the helpers divide the bit count by four.
+
+```c title="swissdict.c"
+size_t before = (i - GROUP) & mask;
+uint64_t empty_before = group_match_empty(group_load(t->ctrl + before));
+uint64_t empty_after  = group_match_empty(group_load(t->ctrl + i));
+int tombstone = leading_zeros(empty_before) + trailing_zeros(empty_after) >= GROUP;
+set_ctrl(t, i, tombstone ? CTRL_DELETED : CTRL_EMPTY);
+```
+
+The 32-slot demo in the Swiss table section applies the same rule when you delete a key, and reports the two counts. How often it helps depends on how full the table is. In my extension, deleting half the keys from a 100,000-entry table that was 76% full produced tombstones for about 44% of the deletes. Doing the same to a million-entry table that happened to sit at 48% load produced tombstones for about 2.5%. The rest went straight back to empty. When tombstones do build up, Abseil's table rehashes in place once they have used up its spare capacity, which clears them without allocating a larger array.
+
+## What Go had to add
+
+The Go blog post is mostly about two problems that the Abseil design does not address, because they are about Go's map semantics rather than speed.[^goblog]
+
+The first is growth. Abseil's table grows all at once: allocate an array twice the size, move every entry, free the old one. For a map with millions of entries that is a pause of milliseconds in the middle of one insert. Go's previous map grew incrementally, moving a few entries per operation, and the new one had to keep latency bounded in the same way. The solution is to make a Go map a set of independent Swiss tables, each holding at most 1,024 entries, with the top bits of the hash selecting which table a key belongs to. When one table fills, it alone is split into two. The number of hash bits used to pick a table grows as the map grows. This is extendible hashing, applied one level above the Swiss table.
+
+<GoDirectory />
+
+The second is modification during iteration. Go allows a map to be changed while a `range` loop is running, with specific rules: entries deleted during the loop must not be produced, updated entries must show their new value, and entries added during the loop may or may not appear. The Swiss layout does nothing to help with this, and the post describes the iterator that copes with tables splitting mid-iteration as the most complex part of the implementation. The Go runtime's version was based on Peter Mattis's `cockroachdb/swiss`, which had already worked through both problems.
+
+## Why Python's dict is not a Swiss table
+
+CPython's `dict` has two properties that a Swiss table does not provide.
+
+One is insertion order, which has been guaranteed since Python 3.7. The dict stores its entries in a dense array in the order they were added, and a separate sparse array of small integers maps hash positions to entries. That is the "compact dict" layout from Python 3.6. Iteration walks the dense array, so order is preserved by construction. A Swiss table has no such array; a key's position depends on its hash, and iteration walks the control bytes. The obvious way to add ordering, which is what Rust's `indexmap` does on top of `hashbrown`, stores an index in each slot and the entry in a dense array, and that brings back the second memory read per hit that the Swiss layout removed.
+
+The other is that a lot of the dict's code is not the hash table. Instances of a class share one key table across all their `__dict__`s. Dicts whose keys are all strings use a smaller entry without a stored hash, because `str` objects cache their own. The interpreter's specialised bytecodes for attribute and global lookups read the dict's internals directly. A replacement would have to reproduce all of it.
+
+So the Python comparison here is a C extension type, `swissdict.SwissDict`. It keeps the parts of a dict lookup that are not the layout: it calls `PyObject_Hash`, compares keys by identity first and `PyObject_RichCompareBool` second, stores the hash next to each key so a resize does not rehash, and restarts a lookup if a user-defined `__eq__` changes the table mid-probe. Underneath it is the table described above: sixteen-wide NEON groups, 7/8 maximum load, the delete rule. It is about 500 lines of C, and it is unordered.
+
+## The layouts, side by side
+
+This figure draws the same five keys in each of the three layouts, with memory shown as 64-byte cache lines, and runs a lookup for a key that is present and for one that is not.
+
+<LayoutCompare caption="The same keys in three layouts. Each row is a 64-byte cache line. Numbered boxes are the reads a lookup makes, in order; the count is how many distinct lines those reads touched. The dict's indices here are 4 bytes each and fit in one line; in a table of a million keys the second index probe is almost always a different line." />
+
+For the key that is present, chaining reads a bucket and two nodes, the compact dict reads two index entries and two entries, and the Swiss table reads one group of control bytes and one slot. For the key that is absent, chaining still walks the chain, the compact dict probes until it finds an empty index, and the Swiss table reads one line and stops.
+
+## Measurements
+
+Everything below ran on an Apple M1, single-threaded. The C and Python numbers are the minimum over several runs; the Go numbers are the median of five. The code is linked at the end.
+
+### Three layouts in C
+
+First, the three layouts written in C with 64-bit integer keys and the same hash function, so the only difference is where the bytes are: a chained table with one `malloc` per node, a copy of the compact dict (32-bit indices, 24-byte entries, perturbed probing, 2/3 maximum load), and a Swiss table (control bytes, 16-byte slots, 7/8 maximum load). Table sizes run from 1,000 entries, which fits in the L1 cache, to 10 million, which fits in no cache.
+
+Each chart has three tabs. "Lookup hit" and "lookup miss" issue independent lookups in a loop, which lets the CPU overlap the memory reads of one lookup with the next. "Dependent hits" use each lookup's result to choose the next key, so nothing can overlap and the chart shows the full latency of one lookup. Hover or focus a chart for exact values; the "table" link under each one lists them.
+
+<BenchChart panels={cPanels()} yLabel="ns per lookup" caption="Pure C, uint64 keys, random lookup order. Lower is better." />
+
+At ten million entries:
+
+| Layout       | Hit   | Miss  | Dependent hit | Bytes per entry |
+| ------------ | ----- | ----- | ------------- | --------------- |
+| Chained      | 18 ns | 20 ns | 59 ns         | 45              |
+| Compact dict | 34 ns | 46 ns | 58 ns         | 34              |
+| Swiss        | 20 ns | 9 ns  | 56 ns         | 28              |
+
+A Swiss miss reads one line of control bytes and nothing else. With independent lookups the CPU can keep many of those reads in flight at once, which is how the average comes in well under the latency of a single read from memory. The compact dict's miss is the most expensive because every probe is an index read and an entry read on separate lines.
+
+The hit case is closer. The dependent-hits tab shows why: at ten million entries all three layouts cost about the same, because each is doing two serial memory reads for a hit. The Swiss table reads a control group and then a slot; the chained table reads a bucket and then a node. The Swiss table gains on hits by fitting more of the table in cache at a given entry count, since it uses the fewest bytes per entry of the three.
+
+<BenchChart panels={cMemoryPanel()} yLabel="bytes per entry" caption="Memory per entry for the same tables, including the slack from power-of-two sizing. Swiss: 17 bytes per slot for every slot. Compact dict: 4 bytes per index slot plus 24 bytes per entry for two thirds of them. Chained: 8 bytes per bucket plus a 32-byte node per key." />
+
+### CPython: dict against SwissDict
+
+Both tables hold Python objects and go through the same hash and equality calls. The timings are from a C loop, which is how the interpreter itself uses `dict` for globals, attributes, and keyword arguments. The tabs switch between string keys, random integer keys, and sequential integer keys. Sequential integers are the `dict`'s best case: its identity hash places them in consecutive slots with no collisions at all.
+
+<BenchChart panels={pythonPanels('hit_ns')} yLabel="ns per lookup hit" caption={`CPython ${meta.python}, lookups of keys that are present, random order, timed from C. String keys are 6 to 14 random lowercase letters.`} />
+
+<BenchChart panels={pythonPanels('miss_ns')} yLabel="ns per lookup miss" caption="The same tables, looked up for keys that are not present." />
+
+With string keys at a million entries:
+
+|                 | `dict` | `SwissDict` |
+| --------------- | ------ | ----------- |
+| Hit             | 102 ns | 43 ns       |
+| Miss            | 117 ns | 30 ns       |
+| Insert          | 142 ns | 80 ns       |
+| Bytes per entry | 31     | 52          |
+
+Random integer keys give similar ratios. Sequential integer keys are the exception at small sizes, for the reason given earlier: `dict` has no collisions and no mixing step, and its probe stays in one cache line. At a million entries the Swiss version is ahead on lookups there too, because once the table no longer fits in cache the mixing step is a small part of the cost.
+
+<BenchChart panels={pythonPanels('insert_ns')} yLabel="ns per insert" caption="Building each table from empty, including every resize, divided by the number of keys." />
+
+Inserts of sequential integers are the one case where `dict` is clearly faster, at every size. Its entries array is appended in order and its index slots are written in order, so building the table is a sequential write pattern. The Swiss table scatters the same keys across the array. At a million keys that is about 17 ns per insert for `dict` and 41 ns for the Swiss table. For string and random integer keys the Swiss table is faster to build.
+
+<BenchChart panels={pythonPanels('bytes_per_item')} yLabel="bytes per entry" caption="sys.getsizeof of each table after building it, divided by the entry count. The saw-tooth shape comes from power-of-two sizing: at some sizes a table has just doubled and is half empty." />
+
+`dict` uses less memory, for a structural reason. The compact dict only pays its 24-byte entry (16 bytes for string keys) for two thirds of the index slots, and the index slots themselves are 1 to 8 bytes depending on table size. A flat Swiss table pays the full slot for every bucket whether it is used or not, and my slots are 24 bytes because they store the hash. Matt also described a `node_hash_map` variant that keeps an 8-byte pointer per slot and stores the entry elsewhere. It would narrow the gap at the cost of one more memory read per hit.
+
+One measurement is left out of the charts: a Python-level loop of `d[k]`. The interpreter has a specialised bytecode for subscripting a `dict` and nothing comparable for an extension type, so from Python the Swiss table measures slower on large tables even though the lookup underneath is faster. That cost comes from the specialising interpreter, and it is one more thing a drop-in replacement would have to deal with.
+
+### Go: the 1.23 map against the 1.24 map
+
+Go is the one language where the swap happened. Go 1.25 still carries the old implementation behind `GOEXPERIMENT=noswissmap`, so both maps ran on the same toolchain and machine.
+
+<BenchChart panels={goPanels([
+  { bench: 'StrLookupHit', label: 'str hit' },
+  { bench: 'StrLookupMiss', label: 'str miss' },
+  { bench: 'IntLookupHit', label: 'int hit' },
+  { bench: 'IntLookupMiss', label: 'int miss' },
+], 'ns_per_op')} yLabel="ns per lookup" caption={`${meta.go}. The old map is GOEXPERIMENT=noswissmap. Median of five runs.`} />
+
+At a million entries:
+
+|                           | Go 1.23 map | Go 1.24 map |
+| ------------------------- | ----------- | ----------- |
+| String hit                | 60 ns       | 49 ns       |
+| String miss               | 75 ns       | 37 ns       |
+| Integer hit               | 42 ns       | 36 ns       |
+| Integer miss              | 38 ns       | 28 ns       |
+| String insert             | 171 ns      | 109 ns      |
+| Integer insert            | 81 ns       | 53 ns       |
+| Bytes per entry, integers | 88          | 76          |
+
+String-key misses halved and string hits improved by about a fifth. Integer keys are more mixed: at a hundred thousand entries the old map was faster on misses and the new map faster on hits. Inserts improved for both key types, and the new map used about 15% less memory per entry at a million integer keys.
+
+<BenchChart panels={goPanels([
+  { bench: 'StrInsert', label: 'str keys' },
+  { bench: 'IntInsert', label: 'int keys' },
+], 'ns_per_insert')} yLabel="ns per insert" caption="Building a map from empty, including incremental growth, divided by the number of entries." />
+
+## Closing
+
+The three changes depend on each other. The separate metadata array is what lets a miss finish without reading a slot, the seven-bit tag is what keeps a hit from reading slots that are not the answer, and the sixteen-wide compare is what lets the table run at 7/8 load, which is where the memory saving comes from.
+
+Most of the work of adopting the design was outside the table. Go needed a directory of small tables and a careful iterator before it fit the language's map semantics. CPython's `dict` is tied to insertion order and to the specialising interpreter closely enough that a layout about twice as fast on lookups in these measurements would still be a hard change to justify.
+
+---
+
+The code for everything in this post, the C extension, the three-layout C benchmark, the Go benchmarks and the scripts that produced the charts, is in [the repo](https://github.com/TopThisHat/swisstable-bench). The interactive figures are Astro components in this site's source.
+
+[^talk]: Matt Kulukundis, ["Designing a Fast, Efficient, Cache-friendly Hash Table, Step by Step"](https://www.youtube.com/watch?v=ncHmEUmJZf4), CppCon 2017. The fleet-wide figures, the memory-access count for `std::unordered_set`, the one-byte suggestion, and the hash-function result are from the talk. I am working from notes rather than a transcript, so my figures may be off from what he said.
+
+[^goblog]: Michael Pratt, ["Faster Go maps with Swiss Tables"](https://go.dev/blog/swisstable), The Go Blog, 26 February 2025.
+
+[^knuth]: Knuth's analysis of linear probing gives about ½(1 + 1/(1 − α)²) slots inspected for an unsuccessful search at load factor α. Donald Knuth, *The Art of Computer Programming*, Volume 3, section 6.4.
+
+[^neon]: Danila Kutenin, ["Porting x86 vector bitmask optimizations to Arm NEON"](https://developer.arm.com/community/arm-community-blogs/b/servers-and-cloud-computing-blog/posts/porting-x86-vector-bitmask-optimizations-to-arm-neon), Arm Community, 2022.
+
+[^absl]: ["Swiss Tables Design Notes"](https://abseil.io/about/design/swisstables) and ["Swiss Tables and absl::Hash"](https://abseil.io/blog/20180927-swisstables), Abseil, September 2018.
