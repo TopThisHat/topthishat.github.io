@@ -1,0 +1,652 @@
+---
+// Two one-hidden-layer networks fit f(x, y) = x·y in the browser at the same
+// parameter budget: a plain unit (act(g·p + b)) and a gated unit
+// (act(g·p + b) · (u·p + v)). The gated one contains a bilinear term, so it can
+// write the product down; the plain one has to approximate it with kinks.
+interface Props {
+  caption?: string;
+}
+const { caption } = Astro.props;
+---
+
+<figure class="gatefit" data-gatefit>
+  <div class="demo-controls">
+    <label>
+      <span class="meta">parameter budget <strong data-budget-label>64</strong></span>
+      <input type="range" min="8" max="400" step="1" value="64" data-budget />
+    </label>
+    <fieldset class="radio">
+      <legend class="meta">plain</legend>
+      <label><input type="radio" name="plain" value="relu" checked data-plain /> relu</label>
+      <label><input type="radio" name="plain" value="gelu" data-plain /> gelu</label>
+    </fieldset>
+    <fieldset class="radio">
+      <legend class="meta">gate</legend>
+      <label><input type="radio" name="gate" value="bilinear" checked data-gate /> bilinear</label>
+      <label><input type="radio" name="gate" value="reglu" data-gate /> reglu</label>
+      <label><input type="radio" name="gate" value="swiglu" data-gate /> swiglu</label>
+    </fieldset>
+    <span class="spacer"></span>
+    <button type="button" data-train>train</button>
+    <button type="button" data-pause class="quiet" disabled>pause</button>
+    <button type="button" data-reset class="quiet">reset</button>
+    <button type="button" data-exact class="quiet">show exact solution</button>
+  </div>
+  <div class="maps">
+    <div class="map">
+      <div class="meta head">target x·y</div>
+      <canvas width="48" height="48" data-canvas="target"></canvas>
+      <div class="meta foot">&nbsp;</div>
+    </div>
+    <div class="map">
+      <div class="meta head"><i class="line s1"></i><span data-plain-head>plain relu</span></div>
+      <canvas width="48" height="48" data-canvas="plain"></canvas>
+      <div class="meta foot" data-plain-foot></div>
+    </div>
+    <div class="map">
+      <div class="meta head"><i class="line s2"></i><span data-gate-head>gated bilinear</span></div>
+      <canvas width="48" height="48" data-canvas="gated"></canvas>
+      <div class="meta foot" data-gate-foot></div>
+    </div>
+  </div>
+  <div class="chart" data-chart></div>
+  <div class="meta note" data-note></div>
+  {caption && <figcaption>{caption}</figcaption>}
+</figure>
+
+<script>
+  type Act = 'relu' | 'gelu' | 'bilinear' | 'reglu' | 'swiglu';
+
+  const SQRT2 = Math.SQRT2;
+  const INV_SQRT_2PI = 1 / Math.sqrt(2 * Math.PI);
+  // erf, Abramowitz and Stegun 7.1.26, |error| < 1.5e-7.
+  function erf(x: number): number {
+    const s = x < 0 ? -1 : 1;
+    const a = Math.abs(x);
+    const t = 1 / (1 + 0.3275911 * a);
+    const y = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-a * a);
+    return s * y;
+  }
+  const Phi = (x: number) => 0.5 * (1 + erf(x / SQRT2));
+  const phi = (x: number) => INV_SQRT_2PI * Math.exp(-0.5 * x * x);
+  const sig = (x: number) => 1 / (1 + Math.exp(-x));
+
+  // act(z) and act'(z) for the scalar nonlinearity inside each unit.
+  function act(kind: Act, z: number): [number, number] {
+    switch (kind) {
+      case 'relu':
+      case 'reglu':
+        return z > 0 ? [z, 1] : [0, 0];
+      case 'gelu':
+        return [z * Phi(z), Phi(z) + z * phi(z)];
+      case 'swiglu': {
+        const s = sig(z);
+        return [z * s, s * (1 + z * (1 - s))];
+      }
+      case 'bilinear':
+        return [z, 1];
+    }
+  }
+
+  function rng(seed: number) {
+    let s = seed >>> 0 || 1;
+    const u = () => {
+      s ^= s << 13;
+      s ^= s >>> 17;
+      s ^= s << 5;
+      return (s >>> 0) / 4294967296;
+    };
+    const n = () => {
+      const a = u() || 1e-9;
+      const b = u();
+      return Math.sqrt(-2 * Math.log(a)) * Math.cos(2 * Math.PI * b);
+    };
+    return { u, n };
+  }
+
+  // One network: W hidden units. Parameters flat in one array with a layout:
+  // g (2W), b (W), d (W), c (1), and for gated also u (2W), v (W).
+  class Net {
+    W: number;
+    gated: boolean;
+    kind: Act;
+    p: Float64Array;
+    m: Float64Array;
+    v: Float64Array;
+    grad: Float64Array;
+    t = 0;
+    constructor(W: number, kind: Act, seed: number) {
+      this.W = W;
+      this.kind = kind;
+      this.gated = kind === 'bilinear' || kind === 'reglu' || kind === 'swiglu';
+      const n = this.gated ? 7 * W + 1 : 4 * W + 1;
+      this.p = new Float64Array(n);
+      this.m = new Float64Array(n);
+      this.v = new Float64Array(n);
+      this.grad = new Float64Array(n);
+      const r = rng(seed);
+      for (let i = 0; i < W; i++) {
+        this.p[this.ig(i)] = r.n();
+        this.p[this.ig(i) + 1] = r.n();
+        this.p[this.ib(i)] = r.u() * 2 - 1;
+        this.p[this.id(i)] = r.n() / Math.sqrt(W);
+        if (this.gated) {
+          this.p[this.iu(i)] = r.n();
+          this.p[this.iu(i) + 1] = r.n();
+          this.p[this.iv(i)] = r.u() * 2 - 1;
+        }
+      }
+      this.p[this.ic()] = 0;
+    }
+    get nParams() {
+      return this.p.length;
+    }
+    ig(i: number) {
+      return 2 * i;
+    }
+    ib(i: number) {
+      return 2 * this.W + i;
+    }
+    id(i: number) {
+      return 3 * this.W + i;
+    }
+    ic() {
+      return 4 * this.W;
+    }
+    iu(i: number) {
+      return 4 * this.W + 1 + 2 * i;
+    }
+    iv(i: number) {
+      return 6 * this.W + 1 + i;
+    }
+    forward(x: number, y: number): number {
+      const p = this.p;
+      let out = p[this.ic()];
+      for (let i = 0; i < this.W; i++) {
+        const z = p[this.ig(i)] * x + p[this.ig(i) + 1] * y + p[this.ib(i)];
+        let a = act(this.kind, z)[0];
+        if (this.gated) a *= p[this.iu(i)] * x + p[this.iu(i) + 1] * y + p[this.iv(i)];
+        out += p[this.id(i)] * a;
+      }
+      return out;
+    }
+    // Full-batch MSE and its gradient, written out by hand.
+    lossAndGrad(xs: Float64Array, ys: Float64Array, ts: Float64Array): number {
+      const p = this.p;
+      const g = this.grad;
+      g.fill(0);
+      const n = xs.length;
+      let loss = 0;
+      for (let k = 0; k < n; k++) {
+        const x = xs[k];
+        const y = ys[k];
+        // forward, keeping per-unit intermediates
+        let out = p[this.ic()];
+        const zs = new Float64Array(this.W);
+        const as = new Float64Array(this.W);
+        const das = new Float64Array(this.W);
+        const ws = new Float64Array(this.W);
+        for (let i = 0; i < this.W; i++) {
+          const z = p[this.ig(i)] * x + p[this.ig(i) + 1] * y + p[this.ib(i)];
+          const [a, da] = act(this.kind, z);
+          zs[i] = z;
+          as[i] = a;
+          das[i] = da;
+          let h = a;
+          if (this.gated) {
+            const w = p[this.iu(i)] * x + p[this.iu(i) + 1] * y + p[this.iv(i)];
+            ws[i] = w;
+            h = a * w;
+          }
+          out += p[this.id(i)] * h;
+        }
+        const err = out - ts[k];
+        loss += err * err;
+        const dout = (2 * err) / n;
+        g[this.ic()] += dout;
+        for (let i = 0; i < this.W; i++) {
+          const h = this.gated ? as[i] * ws[i] : as[i];
+          g[this.id(i)] += dout * h;
+          const dh = dout * p[this.id(i)];
+          let dz: number;
+          if (this.gated) {
+            // product rule: h = act(z) · w
+            dz = dh * ws[i] * das[i];
+            const dw = dh * as[i];
+            g[this.iu(i)] += dw * x;
+            g[this.iu(i) + 1] += dw * y;
+            g[this.iv(i)] += dw;
+          } else {
+            dz = dh * das[i];
+          }
+          g[this.ig(i)] += dz * x;
+          g[this.ig(i) + 1] += dz * y;
+          g[this.ib(i)] += dz;
+        }
+      }
+      return loss / n;
+    }
+    adam(lr = 0.01, b1 = 0.9, b2 = 0.999, eps = 1e-8) {
+      this.t++;
+      const c1 = 1 - Math.pow(b1, this.t);
+      const c2 = 1 - Math.pow(b2, this.t);
+      for (let i = 0; i < this.p.length; i++) {
+        const gi = this.grad[i];
+        this.m[i] = b1 * this.m[i] + (1 - b1) * gi;
+        this.v[i] = b2 * this.v[i] + (1 - b2) * gi * gi;
+        this.p[i] -= (lr * (this.m[i] / c1)) / (Math.sqrt(this.v[i] / c2) + eps);
+      }
+    }
+    // The closed-form product. One bilinear unit does it; the others need two
+    // units because act(x) − act(−x) = x for relu and silu.
+    setExact(): boolean {
+      this.p.fill(0);
+      this.m.fill(0);
+      this.v.fill(0);
+      this.t = 0;
+      if (this.kind === 'bilinear') {
+        this.p[this.ig(0)] = 1; // g = (1, 0)
+        this.p[this.iu(0) + 1] = 1; // u = (0, 1)
+        this.p[this.id(0)] = 1;
+        return true;
+      }
+      if (this.W < 2) return false;
+      this.p[this.ig(0)] = 1;
+      this.p[this.iu(0) + 1] = 1;
+      this.p[this.id(0)] = 1;
+      this.p[this.ig(1)] = -1;
+      this.p[this.iu(1) + 1] = 1;
+      this.p[this.id(1)] = -1;
+      return true;
+    }
+  }
+
+  const N_TRAIN = 512;
+  const GRID = 48;
+  const MAX_STEPS = 3000;
+  const CHUNK = 20;
+
+  const hex = (s: string): [number, number, number] => {
+    const v = s.trim().replace('#', '');
+    const n = parseInt(v.length === 3 ? v.replace(/(.)/g, '$1$1') : v, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  };
+
+  for (const root of document.querySelectorAll<HTMLElement>('[data-gatefit]')) {
+    const $ = <T extends Element>(sel: string) => root.querySelector<T>(sel)!;
+    const budget = $<HTMLInputElement>('[data-budget]');
+    const budgetLabel = $<HTMLElement>('[data-budget-label]');
+    const plainRadios = [...root.querySelectorAll<HTMLInputElement>('[data-plain]')];
+    const gateRadios = [...root.querySelectorAll<HTMLInputElement>('[data-gate]')];
+    const bTrain = $<HTMLButtonElement>('[data-train]');
+    const bPause = $<HTMLButtonElement>('[data-pause]');
+    const bReset = $<HTMLButtonElement>('[data-reset]');
+    const bExact = $<HTMLButtonElement>('[data-exact]');
+    const cvs = {
+      target: $<HTMLCanvasElement>('[data-canvas="target"]'),
+      plain: $<HTMLCanvasElement>('[data-canvas="plain"]'),
+      gated: $<HTMLCanvasElement>('[data-canvas="gated"]'),
+    };
+    const plainHead = $<HTMLElement>('[data-plain-head]');
+    const gateHead = $<HTMLElement>('[data-gate-head]');
+    const plainFoot = $<HTMLElement>('[data-plain-foot]');
+    const gateFoot = $<HTMLElement>('[data-gate-foot]');
+    const chartEl = $<HTMLElement>('[data-chart]');
+    const note = $<HTMLElement>('[data-note]');
+
+    // Fixed training set.
+    const r = rng(0x9e3779b9);
+    const xs = new Float64Array(N_TRAIN);
+    const ys = new Float64Array(N_TRAIN);
+    const ts = new Float64Array(N_TRAIN);
+    for (let k = 0; k < N_TRAIN; k++) {
+      xs[k] = r.u() * 2 - 1;
+      ys[k] = r.u() * 2 - 1;
+      ts[k] = xs[k] * ys[k];
+    }
+
+    // Colors from the figure's CSS variables, re-read on theme change.
+    let cNeg: [number, number, number];
+    let cPos: [number, number, number];
+    let cMid: [number, number, number];
+    function readColors() {
+      const cs = getComputedStyle(root);
+      cNeg = hex(cs.getPropertyValue('--s1'));
+      cPos = hex(cs.getPropertyValue('--s2'));
+      cMid = hex(cs.getPropertyValue('--surface'));
+    }
+    readColors();
+
+    function paint(cv: HTMLCanvasElement, f: (x: number, y: number) => number) {
+      const ctx = cv.getContext('2d')!;
+      const img = ctx.createImageData(GRID, GRID);
+      for (let j = 0; j < GRID; j++) {
+        const y = 1 - (2 * (j + 0.5)) / GRID; // top row is y = +1
+        for (let i = 0; i < GRID; i++) {
+          const x = -1 + (2 * (i + 0.5)) / GRID;
+          const v = Math.max(-1, Math.min(1, f(x, y)));
+          const [a, b] = v < 0 ? [cMid, cNeg] : [cMid, cPos];
+          const t = Math.abs(v);
+          const o = 4 * (j * GRID + i);
+          img.data[o] = a[0] + (b[0] - a[0]) * t;
+          img.data[o + 1] = a[1] + (b[1] - a[1]) * t;
+          img.data[o + 2] = a[2] + (b[2] - a[2]) * t;
+          img.data[o + 3] = 255;
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+    }
+
+    function testMse(f: (x: number, y: number) => number): number {
+      let s = 0;
+      for (let j = 0; j < GRID; j++) {
+        const y = 1 - (2 * (j + 0.5)) / GRID;
+        for (let i = 0; i < GRID; i++) {
+          const x = -1 + (2 * (i + 0.5)) / GRID;
+          const e = f(x, y) - x * y;
+          s += e * e;
+        }
+      }
+      return s / (GRID * GRID);
+    }
+
+    // Live chart of log10 MSE versus step.
+    const ns = 'http://www.w3.org/2000/svg';
+    const W = 640;
+    const H = 200;
+    const L = 48;
+    const R = 16;
+    const T = 24;
+    const B = 34;
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', 'Training mean squared error against step for the plain and the gated network');
+    const el = (tag: string, attrs: Record<string, string | number>, text?: string) => {
+      const e = document.createElementNS(ns, tag);
+      for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, String(v));
+      if (text !== undefined) e.textContent = text;
+      svg.append(e);
+      return e;
+    };
+    const LOG_MIN = -8;
+    const LOG_MAX = 0;
+    const cx = (step: number) => L + (step / MAX_STEPS) * (W - L - R);
+    const cy = (l: number) => T + ((LOG_MAX - Math.max(LOG_MIN, Math.min(LOG_MAX, l))) / (LOG_MAX - LOG_MIN)) * (H - T - B);
+    for (let e = LOG_MIN; e <= LOG_MAX; e += 2) {
+      el('line', { x1: L, x2: W - R, y1: cy(e), y2: cy(e), class: 'grid' });
+      el('text', { x: L - 6, y: cy(e) + 4, class: 'tick', 'text-anchor': 'end' }, e === 0 ? '1' : `1e${e}`);
+    }
+    for (const s of [0, 1000, 2000, 3000]) el('text', { x: cx(s), y: H - 14, class: 'tick', 'text-anchor': 'middle' }, String(s));
+    el('text', { x: L, y: T - 10, class: 'tick' }, 'training MSE');
+    el('text', { x: W - R, y: H - 2, class: 'tick', 'text-anchor': 'end' }, 'step');
+    const pathPlain = el('path', { d: '', class: 'series s1' });
+    const pathGate = el('path', { d: '', class: 'series s2' });
+    chartEl.append(svg);
+
+    let plain: Net;
+    let gated: Net;
+    let step = 0;
+    let histPlain: number[] = [];
+    let histGate: number[] = [];
+    let raf = 0;
+    let running = false;
+    let seed = 1;
+
+    const plainKind = () => plainRadios.find((x) => x.checked)!.value as Act;
+    const gateKind = () => gateRadios.find((x) => x.checked)!.value as Act;
+    const fmt = (v: number) => (v === 0 ? '0' : v < 1e-3 ? v.toExponential(1) : v.toFixed(4));
+
+    function widths() {
+      const b = Number(budget.value);
+      return { wp: Math.max(1, Math.floor((b - 1) / 4)), wg: Math.max(1, Math.floor((b - 1) / 7)) };
+    }
+
+    function build() {
+      const { wp, wg } = widths();
+      plain = new Net(wp, plainKind(), seed);
+      gated = new Net(wg, gateKind(), seed + 7);
+      step = 0;
+      histPlain = [];
+      histGate = [];
+      plainHead.textContent = `plain ${plainKind()}`;
+      gateHead.textContent = `gated ${gateKind()}`;
+      draw();
+    }
+
+    function draw() {
+      paint(cvs.target, (x, y) => x * y);
+      paint(cvs.plain, (x, y) => plain.forward(x, y));
+      paint(cvs.gated, (x, y) => gated.forward(x, y));
+      const mp = testMse((x, y) => plain.forward(x, y));
+      const mg = testMse((x, y) => gated.forward(x, y));
+      plainFoot.textContent = `${plain.W} unit${plain.W === 1 ? '' : 's'}, ${plain.nParams} params, test MSE ${fmt(mp)}`;
+      gateFoot.textContent = `${gated.W} unit${gated.W === 1 ? '' : 's'}, ${gated.nParams} params, test MSE ${fmt(mg)}`;
+      const d = (h: number[]) => h.map((v, i) => `${i ? 'L' : 'M'}${cx(i * CHUNK).toFixed(1)},${cy(Math.log10(Math.max(v, 1e-12))).toFixed(1)}`).join('');
+      pathPlain.setAttribute('d', d(histPlain));
+      pathGate.setAttribute('d', d(histGate));
+      note.textContent =
+        `step ${step} of ${MAX_STEPS}. ` +
+        `One bilinear unit computes x·y exactly with g = (1, 0), u = (0, 1), biases 0, d = 1. ` +
+        `A relu or silu gate needs two units, since act(x) − act(−x) = x. ` +
+        `Without a gate, four squared-relu units do it as ((x+y)² − (x−y)²)/4; plain relu can only approximate it with kinks.`;
+    }
+
+    function tick() {
+      for (let i = 0; i < CHUNK && step < MAX_STEPS; i++) {
+        const lp = plain.lossAndGrad(xs, ys, ts);
+        plain.adam();
+        const lg = gated.lossAndGrad(xs, ys, ts);
+        gated.adam();
+        if (step % CHUNK === 0) {
+          histPlain.push(lp);
+          histGate.push(lg);
+        }
+        step++;
+      }
+      draw();
+      if (step < MAX_STEPS && running) raf = requestAnimationFrame(tick);
+      else stop();
+    }
+
+    function start() {
+      if (step >= MAX_STEPS) build();
+      running = true;
+      bTrain.disabled = true;
+      bPause.disabled = false;
+      raf = requestAnimationFrame(tick);
+    }
+    function stop() {
+      running = false;
+      cancelAnimationFrame(raf);
+      bTrain.disabled = false;
+      bPause.disabled = true;
+    }
+
+    bTrain.addEventListener('click', start);
+    bPause.addEventListener('click', stop);
+    bReset.addEventListener('click', () => {
+      stop();
+      seed = (seed * 1103515245 + 12345) >>> 0 || 1;
+      build();
+    });
+    bExact.addEventListener('click', () => {
+      stop();
+      const ok = gated.setExact();
+      draw();
+      if (!ok) gateFoot.textContent += ' (the exact solution needs 2 units for this gate: raise the budget)';
+    });
+    budget.addEventListener('input', () => {
+      budgetLabel.textContent = budget.value;
+      stop();
+      build();
+    });
+    for (const x of [...plainRadios, ...gateRadios])
+      x.addEventListener('change', () => {
+        stop();
+        build();
+      });
+    const mq = matchMedia('(prefers-color-scheme: dark)');
+    mq.addEventListener('change', () => {
+      readColors();
+      draw();
+    });
+
+    build();
+  }
+</script>
+
+<style>
+  .gatefit {
+    margin: 2.25rem 0;
+    font-family: var(--font-mono);
+    --s1: #2a78d6;
+    --s2: #e87ba4;
+    --s3: #17703a;
+    --s4: #d9822b;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .gatefit {
+      --s1: #3987e5;
+      --s2: #d55181;
+      --s3: #008300;
+      --s4: #e8963e;
+    }
+  }
+
+  .gatefit .demo-controls label strong {
+    color: var(--fg);
+  }
+
+  .gatefit input[type='range'] {
+    width: 12rem;
+    max-width: 100%;
+    accent-color: var(--accent);
+  }
+
+  .radio {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.6rem;
+    align-items: center;
+    margin: 0;
+    padding: 0.2rem 0.5rem 0.3rem;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    font-size: 0.8rem;
+  }
+
+  .radio legend {
+    padding: 0 0.25rem;
+  }
+
+  .radio label {
+    display: inline-flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  .radio input {
+    accent-color: var(--accent);
+    margin: 0;
+  }
+
+  .maps {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .map canvas {
+    display: block;
+    width: 100%;
+    aspect-ratio: 1;
+    image-rendering: pixelated;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+  }
+
+  .map .head,
+  .map .foot {
+    font-size: 0.75rem;
+    line-height: 1.4;
+    min-height: 1.1rem;
+  }
+
+  .map .head {
+    color: var(--fg);
+    margin-bottom: 0.3rem;
+  }
+
+  .map .foot {
+    margin-top: 0.3rem;
+  }
+
+  .gatefit :global(.line) {
+    display: inline-block;
+    width: 1rem;
+    height: 0;
+    margin: 0 0.35rem 0 0;
+    vertical-align: middle;
+    border-top: 2px solid currentColor;
+  }
+
+  .gatefit :global(.line.s1) {
+    color: var(--s1);
+  }
+
+  .gatefit :global(.line.s2) {
+    color: var(--s2);
+  }
+
+  .chart svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+  }
+
+  .chart :global(.grid) {
+    stroke: var(--rule);
+    stroke-width: 1;
+  }
+
+  .chart :global(.tick) {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    fill: var(--muted);
+  }
+
+  .chart :global(.series) {
+    fill: none;
+    stroke-width: 2;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+  }
+
+  .chart :global(.s1) {
+    stroke: var(--s1);
+  }
+
+  .chart :global(.s2) {
+    stroke: var(--s2);
+  }
+
+  .note {
+    margin-top: 0.6rem;
+    font-size: 0.75rem;
+    line-height: 1.5;
+  }
+
+  figcaption {
+    margin-top: 0.75rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+</style>

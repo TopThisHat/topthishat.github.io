@@ -19,7 +19,8 @@ export async function getStaticPaths() {
 const { post, newer, older } = Astro.props;
 const { Content, headings } = await render(post);
 const { title, description, pubDate, updatedDate, tags, draft } = post.data;
-const sections = headings.filter((h) => h.depth === 2);
+// The footnote list's own heading is visually hidden (and the list is hidden where sidenotes show), so keep it out of the contents.
+const sections = headings.filter((h) => h.depth === 2 && h.slug !== 'footnote-label');
 const { links } = SITE;
 const reply = [
   { label: 'email', url: links.email && `mailto:${links.email}` },

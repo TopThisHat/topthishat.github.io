@@ -1,0 +1,295 @@
+---
+title: The Gate in the Middle of the Block
+description: What an activation function does to a signal, from sigmoid to SwiGLU. Saturation, dead units, GELU as an expectation, the gate's bilinear term, the 2/3 width rule, and variance through depth.
+pubDate: 2026-11-02
+tags: [llm, deep-learning, algorithms]
+draft: true
+---
+import ActivationPlot from '../../components/activations/ActivationPlot.astro';
+import GeluMask from '../../components/activations/GeluMask.astro';
+import GateFit from '../../components/activations/GateFit.astro';
+import WidthCalc from '../../components/activations/WidthCalc.astro';
+import VarianceProp from '../../components/activations/VarianceProp.astro';
+import ModelTable from '../../components/activations/ModelTable.astro';
+
+Llama 7B has 6.7 billion parameters, and 4.3 billion of them are in its feed-forward layers.[^params] Each of its 32 blocks runs attention, which mixes information across positions, and then a feed-forward layer, which works on each position alone. In Llama's code the feed-forward layer is one line:
+
+```python title="llama/model.py"
+return self.w2(F.silu(self.w1(x)) * self.w3(x))
+```
+
+The 2017 transformer's version of that line would be `w2(relu(w1(x)))`: two matrices with ReLU between them. Llama's has a third matrix, and it multiplies two projections of the input where ReLU had a threshold on one.[^lineage] The layer is called SwiGLU. In between, GPT-2 used GELU and PaLM introduced SwiGLU to large language models.
+
+This post goes from the ReLU line to the SwiGLU line. It covers the sigmoid's shrinking gradient, He initialization for ReLU, GELU as the expected value of a random gate, and the product of two input features $x_i x_j$ that one gated unit computes exactly. It ends with the published comparisons since 2020, in which the multiplication accounts for most of the measured gain and the choice of Swish inside the gate for about $0.01$ nat. Every demo below runs in the page.
+
+## What a nonlinearity is for
+
+Write the feed-forward layer as
+
+$$
+\mathrm{FFN}(x) = f(x W_1)\, W_2,
+$$
+
+with $x \in \mathbb{R}^d$, $W_1 \in \mathbb{R}^{d \times h}$, $W_2 \in \mathbb{R}^{h \times d}$, and $f$ applied to each of the $h$ hidden values separately. I omit biases because the models this post is about omit them.[^bias] Without $f$ the layer is $x W_1 W_2$, and the product $W_1 W_2$ is one $d \times d$ matrix $M$. The layer computes $xM$, which could have been stored as $M$ with $d^2$ parameters instead of $2dh$. Stacking does not help: two such layers compute $x M_1 M_2$, which is again one matrix. A single matrix cannot compute $|x_1|$, because a linear map that sends $x_1 = 1$ to $1$ must send $x_1 = -1$ to $-1$. With $f = \mathrm{ReLU}$ two hidden units are enough: $|x_1| = \mathrm{ReLU}(x_1) + \mathrm{ReLU}(-x_1)$.
+
+Sigmoid, tanh and ReLU are all nonlinear, and for representing functions any of them is enough. Leshno and colleagues proved in 1993 that one hidden layer can approximate any continuous function on a bounded region, given enough units, as long as $f$ is not a polynomial.[^leshno] They differ in what they do to the gradient. Backpropagation multiplies the gradient by $f'(z)$ at every layer it passes through, so through $L$ layers the gradient picks up $L$ such factors. If each factor is $1/4$, twelve layers scale the gradient by $4^{-12}$, about $6 \times 10^{-8}$. If each is $1$, the gradient arrives at the size it left.
+
+## Saturation
+
+The sigmoid and its derivative are
+
+$$
+\sigma(x) = \frac{1}{1 + e^{-x}}, \qquad \sigma'(x) = \sigma(x)\,(1 - \sigma(x)) \le \tfrac{1}{4}.
+$$
+
+The derivative is at most a quarter, at $x = 0$, and falls off exponentially on both sides. A gradient passing backward through a sigmoid layer is multiplied by $\sigma'(z)$ at every unit, so by at most $1/4$, and by $0.105$ for a unit at $z = 2$. Through $L$ layers the factor is at most $4^{-L}$ before the weights are counted. Large weights could offset the shrinkage, but large weights push the pre-activations $z$ into the flat tails where $\sigma'$ is near zero. This is the vanishing gradient problem, and it is why deep sigmoid networks needed the layer-by-layer pretraining described in the next section.
+
+$\tanh$ is the same curve shifted and scaled, $\tanh(x) = 2\sigma(2x) - 1$, with derivative $1 - \tanh^2(x) \le 1$. Its derivative reaches $1$ at zero, where the sigmoid's reaches $1/4$, and its output is centred on zero. The tails are still flat: at $x = 3$ the derivative of $\tanh$ is $0.01$ and the sigmoid's is $0.045$. Move the crosshair below out to $|x| > 3$ and read the derivatives.
+
+<ActivationPlot show="sigmoid,tanh" caption="Sigmoid and tanh with their derivatives (dashed). The derivative of the sigmoid never exceeds one quarter. Both go flat past |x| of about 3." />
+
+## ReLU
+
+The rectified linear unit, $\mathrm{ReLU}(x) = \max(0, x)$, fixes the tails by not having one on the right. For $x > 0$ it is the identity, so its derivative is $1$. For $x < 0$ it is zero, so its derivative is $0$. Backpropagation multiplies the gradient at each unit by that derivative. A unit whose input was positive passes the gradient back at full size, and a unit whose input was negative passes back nothing. Compare the sigmoid, which multiplies by at most $1/4$ at every unit.
+
+Before 2011, deep sigmoid networks were usually trained in two stages: each layer was first trained on its own without labels, and only then was the whole network trained on the task. Glorot, Bordes and Bengio showed that a deep ReLU network skips the first stage. Its abstract says rectifier networks "can reach their best performance without requiring any unsupervised pre-training" on supervised tasks with large labeled datasets. The paper also points to the zeros: a rectifier layer produces "sparse representations with true zeros", which the authors found well suited to naturally sparse data.[^glorot]
+
+ReLU is positively homogeneous: $\mathrm{ReLU}(ax) = a\,\mathrm{ReLU}(x)$ for $a > 0$, so scaling the input scales the output by the same factor. GELU and Swish are not. Homogeneity means a ReLU changes the second moment of its input by one fixed factor at every input scale. If a pre-activation $z$ is Gaussian with variance $\sigma^2$, then by symmetry
+
+$$
+\mathbb{E}\!\left[\mathrm{ReLU}(z)^2\right] = \tfrac{1}{2}\,\mathbb{E}[z^2] = \tfrac{\sigma^2}{2}.
+$$
+
+A ReLU layer halves the second moment of its input. Left alone, that halving repeats at every layer, and after 20 layers the signal's mean square is $2^{-20}$ of what went in, about a millionth. He, Zhang, Ren and Sun fixed this with the initial weights, and the method is now called He initialization. A hidden unit with $n$ inputs computes $z = \sum_i w_i x_i$. If each weight is drawn with mean zero and variance $v$, then $\mathbb{E}[z^2] = n\,v\,\mathbb{E}[x_i^2]$, so the weights multiply the mean square by $n v$ and the ReLU then multiplies it by $\tfrac{1}{2}$. Choosing $v = 2/n$ makes the product $n \cdot \tfrac{2}{n} \cdot \tfrac{1}{2} = 1$. Each layer hands the next a signal of the same mean square, at any depth.[^he] The variance section below checks this numerically and shows what happens to the smooth functions, which have no such constant.
+
+The cost of the exact zero is the dead unit. A hidden unit whose pre-activation is negative for every input in the data has zero output and zero gradient on every example. Gradient descent cannot move it, because the gradient reaches the unit's input weights only through the unit's own derivative, and that derivative is zero on every example. Lu and colleagues showed that under symmetric initialization a deep enough ReLU network is dead with probability approaching one before training starts, and proposed asymmetric initializations to avoid it.[^dying] Leaky ReLU and PReLU give the negative side a small slope so the unit can recover.[^leaky]
+
+## GELU as an expectation
+
+The Gaussian error linear unit comes from asking what ReLU and dropout have in common.[^gelu] Both multiply an input by a mask. ReLU's mask is $\mathbf{1}[x > 0]$, deterministic and decided by the input's sign. Dropout's mask is Bernoulli with a fixed probability, random and blind to the input. Hendrycks and Gimpel proposed a mask that is random but decided by the input: multiply $x$ by $m \sim \mathrm{Bernoulli}(\Phi(x))$, where $\Phi$ is the standard normal cumulative distribution function. Larger inputs are more likely to pass. The deterministic function to use at test time is the expectation,
+
+$$
+\mathbb{E}[x\,m] = x\,\Phi(x) = \tfrac{x}{2}\left(1 + \operatorname{erf}\!\left(\tfrac{x}{\sqrt{2}}\right)\right) = \mathrm{GELU}(x).
+$$
+
+The demo samples the mask. Set the sample count to one and the dots are either $x$ or $0$. Raise it and the mean converges on $x\,\Phi(x)$ at the rate $1/\sqrt{N}$ that any Monte Carlo average has. Switch the mask distribution to the logistic $\sigma(x)$ and the same construction converges on $x\,\sigma(x)$, which is the next section's function. Switch it to the step and the randomness goes away and the mean is ReLU.
+
+<GeluMask caption="GELU as the mean of a random gate. Each dot is the average of N samples of x times a Bernoulli mask with probability p(x). The solid line is x·p(x). The strip below shows p(x) itself: a soft version of ReLU's step." />
+
+The derivative follows from the product rule, $\mathrm{GELU}'(x) = \Phi(x) + x\,\varphi(x)$ with $\varphi$ the normal density. It is not bounded by one; it peaks at about $1.13$ near $x = 1.1$. The function is not monotone either: it dips to $-0.170$ at $x = -0.752$ before returning to zero, so an input between about $-3$ and $0$ produces a small negative output and a nonzero gradient. A ReLU unit at the same input has zero gradient.
+
+Near zero, $\Phi(x) \approx \tfrac{1}{2} + \tfrac{x}{\sqrt{2\pi}}$, so
+
+$$
+\mathrm{GELU}(x) \approx \tfrac{x}{2} + \tfrac{x^2}{\sqrt{2\pi}} + O(x^3).
+$$
+
+A ReLU is linear on each side of zero. GELU is curved everywhere, and near zero it has an $x^2$ term with coefficient $1/\sqrt{2\pi} = 0.399$.
+
+The exact function needs the error function, and two cheaper approximations are in use. GPT-2 shipped the tanh form $\tfrac{x}{2}\left(1 + \tanh\!\left[\sqrt{2/\pi}\,(x + 0.044715\,x^3)\right]\right)$, which is within $0.0005$ of exact on $[-4, 4]$.[^gpt2] The other is $x\,\sigma(1.702x)$, within $0.02$. Both approximations are in the plot, and the second one comes back in the Swish section.
+
+<ActivationPlot show="relu,gelu" gelu caption="ReLU and GELU with derivatives. The toggle switches GELU between the exact erf form and its two approximations and reports the largest error on the visible range." />
+
+## Swish
+
+Swish is $x\,\sigma(\beta x)$. It was found by an automated search over compositions of simple functions, trained and evaluated on CIFAR-10, and reported in 2017 by Ramachandran, Zoph and Le.[^swish] The same function with $\beta = 1$ had been published earlier that year by Elfwing, Uchibe and Doya as the sigmoid-weighted linear unit, SiLU, for reinforcement learning, and the 2016 GELU paper had already named it as an alternative.[^silu-history] PyTorch calls it `silu`. Every model in this post that uses it sets $\beta = 1$.
+
+The parameter $\beta$ interpolates between two functions. As $\beta \to 0$, $\sigma(\beta x) \to \tfrac{1}{2}$ and Swish becomes $x/2$, linear. As $\beta \to \infty$, $\sigma(\beta x)$ becomes the step and Swish becomes ReLU. Drag the slider.
+
+<ActivationPlot show="relu,swish" beta caption="Swish with β from 0 to 4. At 0 it is the line x/2; as β grows it sharpens into ReLU. The dot marks the minimum, which deepens and moves toward zero as β grows." />
+
+The derivative is $\sigma(\beta x) + \beta x\,\sigma(\beta x)(1 - \sigma(\beta x))$, or in terms of the function itself, $\beta\,\mathrm{Swish}(x) + \sigma(\beta x)(1 - \beta\,\mathrm{Swish}(x))$. At $\beta = 1$ the minimum is $-0.278$ at $x = -1.278$, deeper and further out than GELU's. Near zero, $\sigma(\beta x) \approx \tfrac{1}{2} + \tfrac{\beta x}{4}$, so
+
+$$
+\mathrm{Swish}_\beta(x) \approx \tfrac{x}{2} + \tfrac{\beta}{4}\,x^2 + O(x^3).
+$$
+
+This is the same shape as GELU, half the identity plus a square. Matching the quadratic coefficients gives $\beta = 4/\sqrt{2\pi} = 1.596$, and matching the whole curve on $[-4, 4]$ gives $\beta = 1.702$, with a maximum gap of $0.02$. That is where the second GELU approximation comes from: $x\,\sigma(1.702x)$ is Swish with $\beta = 1.702$. SiLU is Swish with $\beta = 1$.
+
+For $|x| > 3$ GELU is within $0.005$ of ReLU and SiLU is within $0.15$. Closer to zero the two smooth functions differ from ReLU in three ways: a gradient that never reaches exactly zero, a shallow negative dip, and curvature near the origin. Shazeer's ablation, in the next section, measured how much those are worth in a transformer at matched parameters: after 524,288 steps GELU and Swish finished within $0.006$ of ReLU, and behind it.[^shazeer] SwiGLU finished $0.041$ ahead.
+
+## The gate
+
+Dauphin, Fan, Auli and Grangier introduced the gated linear unit in 2016 for convolutional language models.[^dauphin] Instead of one projection followed by a nonlinearity, compute two projections and multiply them, after passing one through a sigmoid:
+
+$$
+\mathrm{GLU}(x) = (xW + b) \otimes \sigma(xV + c).
+$$
+
+The sigmoid branch is a gate: a number in $(0, 1)$ per hidden unit that decides how much of the linear branch gets through. They argued for it from the gradient of the gated product,
+
+$$
+\nabla\big[X \otimes \sigma(X)\big] = \nabla X \otimes \sigma(X) + X \otimes \sigma'(X)\,\nabla X,
+$$
+
+and the first term is a path for the gradient that passes through the value of the gate rather than its derivative. Where the gate is open, that path carries the gradient without the $\sigma' \le 1/4$ attenuation of the previous section. They compared against the gated tanh unit from the PixelCNN and WaveNet work, $\tanh(xW) \otimes \sigma(xV)$, whose gradient has a $\tanh'$ or a $\sigma'$ factor in every term, and found the linear path trained faster and reached lower perplexity.
+
+Shazeer's 2020 note put the GLU in the transformer's feed-forward layer and tried four replacements for the sigmoid: nothing, ReLU, GELU and Swish.[^shazeer] With biases dropped, the family is
+
+$$
+\mathrm{FFN}_{\mathrm{GLU}}(x) = \big(\sigma(xW) \otimes xV\big)\,W_2
+$$
+
+$$
+\mathrm{FFN}_{\mathrm{Bilinear}}(x) = \big(xW \otimes xV\big)\,W_2
+$$
+
+$$
+\mathrm{FFN}_{\mathrm{ReGLU}}(x) = \big(\max(0, xW) \otimes xV\big)\,W_2
+$$
+
+$$
+\mathrm{FFN}_{\mathrm{GEGLU}}(x) = \big(\mathrm{GELU}(xW) \otimes xV\big)\,W_2
+$$
+
+$$
+\mathrm{FFN}_{\mathrm{SwiGLU}}(x) = \big(\mathrm{Swish}_1(xW) \otimes xV\big)\,W_2.
+$$
+
+Each of these has three matrices where the plain layer has two. To keep the parameter count and the arithmetic equal to the two-matrix baseline, he shrank the hidden width by a factor of $2/3$: from $3072$ to $2048$ in a T5-base encoder-decoder with $d = 768$. Then he pre-trained each variant on C4 for 524,288 steps with the span-corruption objective, and also ran four short 65,536-step runs per variant to measure the spread between seeds. The held-out log-perplexities:
+
+| Variant | log-perplexity, 65k steps (std) | log-perplexity, 524k steps |
+|---|---|---|
+| ReLU | 1.997 (0.005) | 1.677 |
+| GELU | 1.983 (0.005) | 1.679 |
+| Swish | 1.994 (0.003) | 1.683 |
+| GLU | 1.982 (0.006) | 1.663 |
+| Bilinear | 1.960 (0.005) | 1.648 |
+| ReGLU | 1.953 (0.003) | 1.645 |
+| GEGLU | 1.942 (0.004) | **1.633** |
+| SwiGLU | 1.944 (0.010) | 1.636 |
+
+In the long runs GELU and Swish in the plain two-matrix layer finish $0.002$ and $0.006$ behind ReLU. GELU leads ReLU by $0.014$ in the short runs, and that lead is gone by 524k steps. The Bilinear row has no activation function, only the product of two linear projections, and it beats all three plain activations by at least $0.029$ in the long runs and $0.023$ in the short ones, where the standard deviation is $0.005$. GEGLU and SwiGLU are another $0.012$ to $0.015$ ahead of Bilinear. Of the $0.044$ between ReLU and GEGLU, $0.029$ is already in the Bilinear row.
+
+The fine-tuning results are less uniform. On SuperGLUE every gated variant averages above every plain one, $73.66$ to $74.56$ against $72.40$ to $72.98$. On GLUE four of the five do, and Bilinear at $83.79$ is level with ReLU at $83.80$. On SQuAD the F1 scores of all eight fall between $90.69$ and $91.18$, and GLU is last. The best variant changes with the task: GEGLU on perplexity, ReGLU on GLUE and SQuAD F1, SwiGLU on SuperGLUE. The paper's conclusion offers no mechanism: "We offer no explanation as to why these architectures seem to work; we attribute their success, as all else, to divine benevolence."
+
+### Products of input features
+
+A plain hidden unit computes $f(w \cdot x)$: a function of one projection of the input. Whatever $f$ is, the unit's output is constant along every direction orthogonal to $w$. That is called a ridge function, and a feed-forward layer is a sum of $h$ of them. A gated unit computes $f(w \cdot x)\,(v \cdot x)$, a function of two projections. Take the simplest case, the bilinear unit with $f$ the identity:
+
+$$
+(w \cdot x)(v \cdot x) = x^\top (w v^\top)\, x.
+$$
+
+This is a quadratic form in $x$ with a rank-one matrix. The layer's output is a sum of $h$ of these, which can represent any quadratic form of rank up to $h$, and $W_2$ mixes them. One bilinear unit with $w = e_i$ and $v = e_j$ outputs the product $x_i x_j$ exactly. A plain layer has to build that product out of ridge functions. ReLU has no curvature, so a ReLU layer approximates the saddle $x_i x_j$ with flat pieces joined at kinks, and the error falls only as pieces are added. With an exact square, two plain units would be enough, because $xy = \tfrac{1}{4}\big[(x+y)^2 - (x-y)^2\big]$. GELU has a square only in its expansion near zero, $\tfrac{x}{2} + 0.399\,x^2$. By $|x| = 3$ it is within $0.005$ of ReLU, so the identity does not hold for inputs of that size.
+
+The demo trains both kinds of layer on $f(x, y) = xy$ with the same parameter budget. Choose the budget, pick the plain activation and the gate, and watch the two surfaces and their errors. The exact-solution button sets one bilinear unit to $w = (1, 0)$, $v = (0, 1)$, which computes the product with zero error and five parameters.
+
+<GateFit caption="Fitting f(x, y) = xy. Left: the target. Middle: a one-hidden-layer network of plain units. Right: a network of gated units with the same number of parameters. Test error on a 48 by 48 grid under each." />
+
+### The gate as a quadratic spline
+
+Queiruga's 2026 paper, titled "Divine Benevolence is an $x^2$" after Shazeer's conclusion, describes the ReGLU unit as a spline.[^queiruga] Expand one ReGLU unit on the region where its gate is open, with biases put back for a moment:
+
+$$
+d\,\max(0,\, g x + g_0)\,(u x + u_0) = d\,\big(g u\, x^2 + (g_0 u + g u_0)\, x + g_0 u_0\big)
+$$
+
+wherever $g x + g_0 > 0$. The unit is quadratic in $x$ where the gate is on and zero where it is off. A layer of ReGLU units is therefore a piecewise quadratic function of the input, with the pieces separated by the hyperplanes where gates switch. A layer of ReLU units is piecewise linear with the same kind of boundaries. In one dimension this is the difference between a linear spline and a quadratic spline with the same number of knots. Linear interpolation on knots spaced $h$ apart has error $O(h^2)$; quadratic has $O(h^3)$. With $P$ parameters buying about $P$ knots, $h \sim 1/P$, and the error falls as $P^{-2}$ for the ReLU layer and $P^{-3}$ for the gated one. That is one more power of $P$ from the same parameter count.
+
+Queiruga measured this on a one-dimensional target, $f(x) = 1/(1 + \cos^2 \pi x)$, and found exponents of $-2.18$ for a ReLU network and $-3.12$ for a gated one. The result is for shallow networks on one input, and the paper says as much.
+
+## Width accounting
+
+The gate costs a third matrix. Shazeer's rule is to keep parameters and arithmetic fixed: with a plain hidden width $h$, the gated layer gets $h_g = 2h/3$, so that $3 d h_g = 2 d h$. With the conventional $h = 4d$ that is $h_g = 8d/3$. PaLM did not do this. Its paper says SwiGLU "does require three matrix multiplications in the MLP rather than two" and then sets the feed-forward width to $4d$ anyway, so PaLM's feed-forward layers carry $12 d^2$ parameters where a GELU model of the same width carries $8 d^2$.[^palm] Llama restored the $2/3$: "We use a dimension of $\tfrac{2}{3} 4d$ instead of $4d$ as in PaLM."[^llama1] Its code then rounds up to a multiple of 256 and applies an optional multiplier before rounding:
+
+```python title="llama/model.py"
+hidden_dim = int(2 * hidden_dim / 3)
+if ffn_dim_multiplier is not None:
+    hidden_dim = int(ffn_dim_multiplier * hidden_dim)
+hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
+```
+
+For the 7B model, $4 \cdot 4096 = 16384$, two thirds is $10922$, and the next multiple of 256 is $11008$, the number in the config file. For Llama 2 70B and every Llama 3, the multiplier is $1.3$ and the rounding is coarser: $\tfrac{2}{3} \cdot 4 \cdot 4096 \cdot 1.3 = 14199$, rounded up to a multiple of 1024, is Llama 3 8B's $14336$, which is $3.5d$. Mistral and phi-4 use $3.5d$ directly. Gemma goes wider, with a GELU gate and hidden widths of $4d$ to $8d$, and its technical reports quote twice the width in the config files because they count the gate and the linear branch as one layer.[^gemma]
+
+<WidthCalc caption="The hidden width and parameter count of one feed-forward layer. The presets reproduce the numbers in each model's config file from its paper's rule." />
+
+<ModelTable caption="Which activation, which width. The ratio column is the config file's intermediate size over the model width. Sources in the footnotes." />
+
+Mistral's paper lists `hidden_dim 14336` in its parameter table and never names the activation; the config file says `silu` and the architecture is Llama's.[^mistral] gpt-oss, the open-weight model OpenAI released in 2025, describes its activation as SwiGLU with a footnote that the implementation is "unconventional, including clamping and a residual connection". The code computes $x_g\,\sigma(1.702\,x_g) \cdot (x_l + 1)$, with both branches clamped at 7.[^gptoss] The constant $1.702$ is the one from the GELU section: this gate is the sigmoid approximation to GELU, so the layer is a clamped GEGLU with a bias of one on the linear branch, and its experts have a hidden width of exactly $d$.
+
+## The signal through depth
+
+The He initialization argument earlier used one fact about ReLU, that it halves the second moment of a Gaussian input, and one property, homogeneity, that made the factor independent of the input's scale. The same calculation applies to every function in the post. Consider a stack of random layers $x_{l+1} = f(W_l x_l)$ with $W_l$ entries drawn from $\mathcal{N}(0, g^2/n)$ and width $n$ large. Each pre-activation is Gaussian with variance $g^2 r_l^2$, where $r_l$ is the root-mean-square of $x_l$. The next layer's scale is
+
+$$
+r_{l+1}^2 = \mathbb{E}\!\left[f(z)^2\right], \qquad z \sim \mathcal{N}(0,\, g^2 r_l^2).
+$$
+
+For ReLU the right-hand side is $g^2 r_l^2 / 2$, so the ratio $r_{l+1}/r_l = g/\sqrt{2}$ is a constant and $g = \sqrt{2}$ holds the scale fixed. For GELU and Swish the ratio depends on $r_l$, because they are not homogeneous. At unit input scale and $g = 1$, $\mathbb{E}[\mathrm{GELU}(z)^2] = 0.425$ and $\mathbb{E}[\mathrm{SiLU}(z)^2] = 0.356$, against ReLU's $0.5$. At small scale both functions look like $x/2$, so the ratio drops toward $1/4$; at large scale they look like ReLU and it rises to $1/2$. There is no single gain that keeps a deep GELU stack at constant scale, only a fixed point the signal drifts toward.
+
+The gated functions have no such gain either, and their scale moves faster. For the bilinear unit, with the two projections independent,
+
+$$
+\mathbb{E}\!\left[(z_1 z_2)^2\right] = \mathbb{E}[z_1^2]\,\mathbb{E}[z_2^2] = g^4 r_l^4, \qquad r_{l+1} = g^2 r_l^2.
+$$
+
+The output scale is the square of the input scale. Take logs: $\log r_{l+1} = 2 \log r_l + 2 \log g$. The logarithm of the scale doubles every layer. A signal slightly above the fixed point $r = 1/g^2$ explodes doubly exponentially and one slightly below collapses the same way. Squared ReLU has the same degree: $\mathbb{E}[\mathrm{ReLU}(z)^4] = \tfrac{3}{2}\sigma^4$. SwiGLU and GEGLU are degree two for large inputs and degree about one and a half near zero. No choice of gain fixes any of them.
+
+<VarianceProp caption="Signal scale (left) and gradient scale (right) through a stack of random layers of width 256. Change the gain and the input scale; turn on the per-layer RMSNorm that pre-norm transformers have." />
+
+A transformer does not depend on the gain to hold the scale. Every block normalizes its input before the feed-forward layer, so $r_l$ is pinned to one by construction, and the output is added to a residual stream that the next block normalizes again. What the gate changes is the shape of the layer's output distribution. A product of two Gaussians has heavier tails than either, and a function that grows like $x^2$ for large inputs turns an outlier of size 10 into one of size 100. Two 2026 papers trace low-precision training instabilities in SwiGLU models to that tail: PowLU replaces the positive side with a bounded power so the growth is sub-quadratic, and MemGLU closes the gate entirely for large inputs and finds, at 9M and 30M parameters, that the loss changes by about 0.1 percent.[^powlu][^memglu]
+
+The backward panel measures Dauphin's argument. With normalization on and $g = \sqrt{2}$, a plain ReLU or GELU layer passes a gradient through at about the scale it arrived, a ratio near one per layer. Every gated layer roughly doubles the gradient's mean square. The reason is the two terms in the gradient from the GLU section: the gate branch contributes $W^\top\!\big(f'(z) \otimes (Vx) \otimes u\big)$ and the linear branch contributes $V^\top\!\big(f(z) \otimes u\big)$, each about the size of the incoming gradient at this gain, and the two are independent and add. Over 48 layers that is $2^{24}$, about $10^7$, in root-mean-square, which is why the demo has no residual connections: in a transformer the residual stream carries the gradient around every block and the block's own Jacobian only perturbs it. Those two terms are the two routes Dauphin described, and the second one does not pass through the gate's derivative.
+
+## Where it is going
+
+David So and colleagues searched over transformer modifications in 2021 and reported that the single most effective one was replacing ReLU in the feed-forward layer with its square, $\max(0, x)^2$.[^primer] Squared ReLU is piecewise quadratic like ReGLU, costs no extra matrix, and in their runs matched or beat the GLU variants. The paper notes that it has "drastically different asymptotics" from ReLU, GELU and Swish, and points at the usefulness of higher-order terms. PaLM in 2022 and Llama in 2023 shipped SwiGLU instead.
+
+The recent interest in squared ReLU is about sparsity. A ReLU feed-forward layer is sparse: Li and colleagues measured that in a trained T5-base only about 3 percent of the hidden units are nonzero for a given token, and the fraction falls as models grow.[^lazy] A sparse hidden vector means the down-projection, which is a third of the layer's arithmetic, can skip most of its rows at inference. Apple's "ReLU Strikes Back" measured the same quantity on open models: over 90 percent of the hidden units are zero in a ReLU OPT model, 0 percent in Llama's SwiGLU layers and 1 percent in Falcon's GELU ones, because a smooth function and a product never produce an exact zero.[^relustrikes] The same paper trained 1.3B-parameter models from scratch with ReLU, GELU, SiLU and a sharpened Swish and found no significant difference in loss between them, which is Shazeer's first three rows again at larger scale. "ReLU² Wins" compared ReLU, SwiGLU, ReGLU and squared ReLU on the trade-off between sparsity and loss and chose squared ReLU, and a 2024 result at 1.1B parameters on 126B tokens put squared ReLU ahead of SwiGLU at matched parameters, 10.35 against 10.52 perplexity, with a trainable variant called xIELU slightly ahead of both.[^relu2wins][^xielu]
+
+In Shazeer's table and in Apple's 1.3B-parameter runs, ReLU, GELU and Swish reach the same loss. They differ in whether the hidden layer has exact zeros. The gate is worth about $0.04$ nats at T5 scale, and $0.029$ of that is already in the Bilinear row, which has no activation function. Squared ReLU gets a quadratic term without the third matrix and keeps the zeros. Swapping the sigmoid inside the gate for GELU or Swish moved Shazeer's result by $0.03$, and gpt-oss ships a GELU gate under the SwiGLU name. SwiGLU is the default because PaLM cited Shazeer's SuperGLUE column, Llama cited PaLM, and Mistral, Qwen and the other models in the table above took Llama's layer.
+
+[^primer]: David So, Wojciech Mańke, Hanxiao Liu, Zihang Dai, Noam Shazeer, Quoc Le, ["Primer: Searching for Efficient Transformers for Language Modeling"](https://arxiv.org/abs/2109.08668), NeurIPS 2021.
+
+[^lazy]: Zonglin Li et al., ["The Lazy Neuron Phenomenon: On Emergence of Activation Sparsity in Transformers"](https://arxiv.org/abs/2210.06313), ICLR 2023.
+
+[^relustrikes]: Iman Mirzadeh et al., ["ReLU Strikes Back: Exploiting Activation Sparsity in Large Language Models"](https://arxiv.org/abs/2310.04564), ICLR 2024. Table 1 for the sparsity figures; section 3 for the from-scratch comparison.
+
+[^relu2wins]: Zhengyan Zhang et al., ["ReLU² Wins: Discovering Efficient Activation Functions for Sparse LLMs"](https://arxiv.org/abs/2402.03804), 2024.
+
+[^xielu]: Allen Hao Huang, ["Deriving Activation Functions via Integration"](https://arxiv.org/abs/2411.13010), 2024. Table with Llama 1.1B on 126B FineWeb-Edu tokens, parameter-matched: SwiGLU 10.517, ReLU² 10.352, xIELU 10.207.
+
+[^params]: Llama 7B has $d = 4096$, 32 layers and a feed-forward hidden width of 11008. Each feed-forward layer has three matrices of $4096 \times 11008$, 135 million parameters, and 32 of them make 4.33 billion. Each attention layer has four $4096 \times 4096$ projections, 67 million, for 2.15 billion in total. The embedding and output matrices add 0.26 billion.
+
+[^lineage]: Ashish Vaswani et al., ["Attention Is All You Need"](https://arxiv.org/abs/1706.03762), NeurIPS 2017, section 3.3, for ReLU; Hugo Touvron et al., ["LLaMA"](https://arxiv.org/abs/2302.13971), 2023, section 2.2, for SwiGLU. GPT-2 and PaLM are cited where their layers come up below.
+
+[^gpt2]: Alec Radford et al., ["Language Models are Unsupervised Multitask Learners"](https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf), 2019. The activation is in the code, [`src/model.py`](https://github.com/openai/gpt-2/blob/master/src/model.py): the tanh approximation of GELU, with `nx*4` for the hidden width. GPT-3's paper says it uses "the same model and architecture as GPT-2" with $d_{ff} = 4 d_{\text{model}}$.
+
+[^palm]: Aakanksha Chowdhery et al., ["PaLM: Scaling Language Modeling with Pathways"](https://arxiv.org/abs/2204.02311), 2022. Section 2: "We use SwiGLU activations ... because they have been shown to significantly increase quality compared to standard ReLU, GeLU, or Swish activations," and "The feed-forward size $d_{ff}$ is always $4 \times d_{\text{model}}$."
+
+[^llama1]: Hugo Touvron et al., ["LLaMA: Open and Efficient Foundation Language Models"](https://arxiv.org/abs/2302.13971), 2023, section 2.2. The rounding code is in [`llama/model.py`](https://github.com/meta-llama/llama/blob/main/llama/model.py).
+
+[^leshno]: Moshe Leshno, Vladimir Lin, Allan Pinkus, Shimon Schocken, ["Multilayer feedforward networks with a nonpolynomial activation function can approximate any function"](https://doi.org/10.1016/S0893-6080(05)80131-5), Neural Networks 6(6), 1993.
+
+[^bias]: Shazeer dropped the biases "following the T5 codebase," with a footnote: "Also in the interest of ML fairness." PaLM, Llama, and most models since have none in the feed-forward layer.
+
+[^glorot]: Xavier Glorot, Antoine Bordes, Yoshua Bengio, ["Deep Sparse Rectifier Neural Networks"](https://proceedings.mlr.press/v15/glorot11a.html), AISTATS 2011.
+
+[^he]: Kaiming He, Xiangyu Zhang, Shaoqing Ren, Jian Sun, ["Delving Deep into Rectifiers"](https://arxiv.org/abs/1502.01852), ICCV 2015. The same paper introduces PReLU.
+
+[^dying]: Lu Lu, Yeonjong Shin, Yanhui Su, George Em Karniadakis, ["Dying ReLU and Initialization: Theory and Numerical Examples"](https://arxiv.org/abs/1903.06733), 2019.
+
+[^leaky]: Andrew Maas, Awni Hannun, Andrew Ng, ["Rectifier Nonlinearities Improve Neural Network Acoustic Models"](https://ai.stanford.edu/~amaas/papers/relu_hybrid_icml2013_final.pdf), ICML workshop 2013.
+
+[^gelu]: Dan Hendrycks, Kevin Gimpel, ["Gaussian Error Linear Units (GELUs)"](https://arxiv.org/abs/1606.08415), 2016. The first versions were titled "Bridging Nonlinearities and Stochastic Regularizers with Gaussian Error Linear Units," which is the name Shazeer cites.
+
+[^swish]: Prajit Ramachandran, Barret Zoph, Quoc Le, ["Searching for Activation Functions"](https://arxiv.org/abs/1710.05941), 2017. The first version was titled "Swish: a Self-Gated Activation Function."
+
+[^silu-history]: Stefan Elfwing, Eiji Uchibe, Kenji Doya, ["Sigmoid-Weighted Linear Units for Neural Network Function Approximation in Reinforcement Learning"](https://arxiv.org/abs/1702.03118), 2017. Hendrycks and Gimpel's appendix B states that the 2016 GELU paper introduced $x\sigma(x)$ under the name SiLU, that Elfwing and colleagues published it as "SIL" and later adopted the SiLU name, that the first Swish paper cited neither, and that the frameworks renamed `swish` to `silu` afterwards. The Swish paper's second version added the learnable $\beta$ and the citation to Elfwing.
+
+[^shazeer]: Noam Shazeer, ["GLU Variants Improve Transformer"](https://arxiv.org/abs/2002.05202), 2020. Tables 1 through 4. The setup is T5-base, 12 encoder and 12 decoder layers, $d = 768$, trained without dropout, which is why its baseline beats the T5 paper's.
+
+[^dauphin]: Yann Dauphin, Angela Fan, Michael Auli, David Grangier, ["Language Modeling with Gated Convolutional Networks"](https://arxiv.org/abs/1612.08083), ICML 2017. Section 3 has the gradient argument; figure 3 has the ablation against ReLU, tanh and the gated tanh unit. The bilinear variant without the sigmoid is credited to Andriy Mnih and Geoffrey Hinton, "Three New Graphical Models for Statistical Language Modelling," ICML 2007.
+
+[^queiruga]: Alejandro Queiruga, ["Divine Benevolence is an $x^2$: GLUs scale asymptotically faster than MLPs"](https://arxiv.org/abs/2602.14495), 2026. Related: Michael Pearce, Thomas Dooms, Alice Rigg, Jose Oramas, Lee Sharkey, ["Bilinear MLPs enable weight-based mechanistic interpretability"](https://arxiv.org/abs/2410.08417), ICLR 2025, which uses the same quadratic-form view of the bilinear layer to read features off the weights.
+
+[^gemma]: Gemma Team, ["Gemma: Open Models Based on Gemini Research and Technology"](https://arxiv.org/abs/2403.08295), 2024: "The standard ReLU non-linearity is replaced by the approximated version of the GeGLU activation function." Gemma 2's table lists "Non-linearity: GeGLU" and a feed-forward dimension of 28672 for the 9B model, whose config file has `intermediate_size: 14336` and `hidden_activation: gelu_pytorch_tanh`. Gemma 3 and Gemma 4 configs set the same activation at $4d$.
+
+[^mistral]: Albert Jiang et al., ["Mistral 7B"](https://arxiv.org/abs/2310.06825), 2023, table 1. Mixtral's paper, [arXiv:2401.04088](https://arxiv.org/abs/2401.04088), does name it: "we use the same SwiGLU architecture as the expert function."
+
+[^gptoss]: OpenAI, ["gpt-oss-120b & gpt-oss-20b Model Card"](https://arxiv.org/abs/2508.10925), 2025, and [`gpt_oss/torch/model.py`](https://github.com/openai/gpt-oss/blob/main/gpt_oss/torch/model.py), where `swiglu` is defined with `alpha=1.702, limit=7.0` and returns `out_glu * (x_linear + 1)`.
+
+[^powlu]: Jiang et al., ["PowLU: An Activation Function for Stable Pre-Training of LLMs"](https://arxiv.org/abs/2605.25704), 2026.
+
+[^memglu]: Ge, Yang, Nie, ["Is SwiGLU's Open Positive Tail Necessary? Evidence from Closed-Tail Gating with MemGLU"](https://arxiv.org/abs/2608.07323), 2026.

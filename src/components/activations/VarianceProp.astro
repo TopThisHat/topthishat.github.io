@@ -1,0 +1,405 @@
+---
+// How a signal's scale, and a gradient's, change through a stack of random
+// layers, for each activation, as a function of the initialization gain. The
+// math is in src/lib/varianceprop.ts; the figure is drawn here at build time
+// and redrawn in the browser after each control change.
+import { ACTS, MAX_DEPTH, W, H, makeMatrices, simulate, renderPanel, fmtRatio, fmtMeasured, type Act } from '../../lib/varianceprop';
+
+interface Props {
+  caption?: string;
+  defaults?: string;
+}
+const { caption, defaults = 'relu,gelu,swiglu,bilinear' } = Astro.props;
+const on = new Set(defaults.split(',').map((s) => s.trim()) as Act[]);
+
+const INIT = { gain: Math.SQRT2, depth: 24, inputScale: 1, norm: false, seed: 1 };
+const matrices = makeMatrices(INIT.seed, MAX_DEPTH);
+const results = ACTS.filter((a) => on.has(a.key)).map((a) => simulate(a, matrices, INIT));
+const forwardSvg = renderPanel(results, INIT.depth, 'forward');
+const backwardSvg = renderPanel(results, INIT.depth, 'backward');
+const fmtC = (r: (typeof results)[number]) => (r.c === null ? '' : ` (c(σ=${r.sigma.toFixed(2)}) = ${r.c.toFixed(3)})`);
+---
+
+<figure class="vp" data-vp data-defaults={defaults}>
+  <div class="controls">
+    <label>
+      <span class="meta">gain g = <strong data-gain-label>{INIT.gain.toFixed(2)}</strong></span>
+      <input type="range" min="0.5" max="3" step="0.05" value={INIT.gain} data-gain />
+    </label>
+    <label>
+      <span class="meta">depth = <strong data-depth-label>{INIT.depth}</strong></span>
+      <input type="range" min="4" max={MAX_DEPTH} step="1" value={INIT.depth} data-depth />
+    </label>
+    <label>
+      <span class="meta">input RMS = <strong data-scale-label>{INIT.inputScale.toFixed(2)}</strong></span>
+      <input type="range" min="-2" max="2" step="0.25" value="0" data-scale />
+    </label>
+    <label class="check meta">
+      <input type="checkbox" data-norm /> RMSNorm before each layer
+    </label>
+    <button type="button" class="quiet" data-resample>resample</button>
+  </div>
+  <div class="legend" data-legend>
+    {
+      ACTS.map((a) => (
+        <label class={`meta s${a.slot}`}>
+          <input type="checkbox" data-act={a.key} checked={on.has(a.key)} />
+          <i class="line" />
+          {a.name}
+        </label>
+      ))
+    }
+    <span class="meta key"><i class="line pred"></i>predicted from E[f(z)²]</span>
+  </div>
+  <div class="panels">
+    <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Signal RMS per layer through a stack of random layers, one line per activation" data-forward set:html={forwardSvg} />
+    <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Gradient RMS per layer, pushed back from a unit vector at the output" data-backward set:html={backwardSvg} />
+  </div>
+  <table class="readout" data-readout>
+    <thead>
+      <tr>
+        <th>activation</th>
+        <th>E[x²] ratio per layer, measured</th>
+        <th>predicted</th>
+        <th>gradient E[u²] ratio per layer</th>
+      </tr>
+    </thead>
+    <tbody>
+      {
+        results.map((r) => (
+          <tr class={`s${r.act.slot}`}>
+            <td>
+              <i class="line" />
+              {r.act.name}
+            </td>
+            <td>{fmtMeasured(r)}</td>
+            <td>
+              {fmtRatio(r.predRatio)} <span class="meta">{r.act.formula}{fmtC(r)}</span>
+            </td>
+            <td>{fmtRatio(r.gradRatio)}</td>
+          </tr>
+        ))
+      }
+    </tbody>
+  </table>
+  <div class="note meta" data-note>
+    n = 256, 4 input vectors, fresh W and V per layer. r is the RMS of a layer's input (1 with RMSNorm). c(σ) = E[f(z)²]/σ² for z ~ N(0, σ²), σ = g·r, which depends on the scale for GELU and Swish because neither is homogeneous.
+  </div>
+  {caption && <figcaption>{caption}</figcaption>}
+</figure>
+
+<script>
+  import { ACTS, MAX_DEPTH, makeMatrices, simulate, renderPanel, fmtRatio, fmtMeasured, type Act, type SimResult } from '../../lib/varianceprop';
+
+  for (const root of document.querySelectorAll<HTMLElement>('[data-vp]')) {
+    const gain = root.querySelector<HTMLInputElement>('[data-gain]')!;
+    const depth = root.querySelector<HTMLInputElement>('[data-depth]')!;
+    const scale = root.querySelector<HTMLInputElement>('[data-scale]')!;
+    const norm = root.querySelector<HTMLInputElement>('[data-norm]')!;
+    const resample = root.querySelector<HTMLButtonElement>('[data-resample]')!;
+    const gainLabel = root.querySelector<HTMLElement>('[data-gain-label]')!;
+    const depthLabel = root.querySelector<HTMLElement>('[data-depth-label]')!;
+    const scaleLabel = root.querySelector<HTMLElement>('[data-scale-label]')!;
+    const fwd = root.querySelector<SVGSVGElement>('[data-forward]')!;
+    const bwd = root.querySelector<SVGSVGElement>('[data-backward]')!;
+    const tbody = root.querySelector<HTMLTableSectionElement>('[data-readout] tbody')!;
+    const checks = [...root.querySelectorAll<HTMLInputElement>('[data-act]')];
+
+    let seed = 1;
+    let matrices = makeMatrices(seed, MAX_DEPTH);
+    const cache = new Map<string, SimResult>();
+    let pending = false;
+
+    function opts() {
+      return {
+        gain: Number(gain.value),
+        depth: Number(depth.value),
+        inputScale: 2 ** Number(scale.value),
+        norm: norm.checked,
+      };
+    }
+
+    function row(r: SimResult): string {
+      const c = r.c === null ? '' : ` (c(σ=${r.sigma.toFixed(2)}) = ${r.c.toFixed(3)})`;
+      return (
+        `<tr class="s${r.act.slot}"><td><i class="line"></i>${r.act.name}</td>` +
+        `<td>${fmtMeasured(r)}</td>` +
+        `<td>${fmtRatio(r.predRatio)} <span class="meta">${r.act.formula}${c}</span></td>` +
+        `<td>${fmtRatio(r.gradRatio)}</td></tr>`
+      );
+    }
+
+    function update() {
+      pending = false;
+      const o = opts();
+      gainLabel.textContent = o.gain.toFixed(2);
+      depthLabel.textContent = String(o.depth);
+      scaleLabel.textContent = o.inputScale.toFixed(2);
+      const key = `${seed}|${o.gain}|${o.depth}|${o.inputScale}|${o.norm}`;
+      const on = new Set(checks.filter((c) => c.checked).map((c) => c.dataset.act as Act));
+      const results = ACTS.filter((a) => on.has(a.key)).map((a) => {
+        const k = `${key}|${a.key}`;
+        let r = cache.get(k);
+        if (!r) {
+          r = simulate(a, matrices, o);
+          cache.set(k, r);
+        }
+        return r;
+      });
+      fwd.innerHTML = renderPanel(results, o.depth, 'forward');
+      bwd.innerHTML = renderPanel(results, o.depth, 'backward');
+      tbody.innerHTML = results.map(row).join('');
+    }
+
+    function schedule() {
+      if (pending) return;
+      pending = true;
+      requestAnimationFrame(update);
+    }
+
+    for (const el of [gain, depth, scale]) el.addEventListener('input', schedule);
+    norm.addEventListener('change', schedule);
+    for (const c of checks) c.addEventListener('change', schedule);
+    resample.addEventListener('click', () => {
+      seed += 1;
+      matrices = makeMatrices(seed, MAX_DEPTH);
+      cache.clear();
+      schedule();
+    });
+  }
+</script>
+
+<style>
+  .vp {
+    margin: 2.25rem 0;
+    font-family: var(--font-mono);
+    --s1: #2a78d6;
+    --s2: #e87ba4;
+    --s3: #17703a;
+    --s4: #d9822b;
+    --s5: #7a5cc7;
+    --s6: #8a8a80;
+    --s7: #b5312e;
+    --s8: #0f8b8d;
+    --s9: #9c7a00;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .vp {
+      --s1: #3987e5;
+      --s2: #d55181;
+      --s3: #008300;
+      --s4: #e8963e;
+      --s5: #9b7fe0;
+      --s6: #9a9a90;
+      --s7: #e0534f;
+      --s8: #2bb3b5;
+      --s9: #c9a227;
+    }
+  }
+
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.25rem;
+    align-items: end;
+    margin-bottom: 0.6rem;
+  }
+
+  .controls label {
+    display: grid;
+    gap: 0.2rem;
+    min-width: 9rem;
+  }
+
+  .controls label.check {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding-bottom: 0.3rem;
+    min-width: 0;
+  }
+
+  .controls strong {
+    color: var(--fg);
+  }
+
+  input[type='range'] {
+    width: 100%;
+    max-width: 14rem;
+    accent-color: var(--accent);
+  }
+
+  input[type='checkbox'] {
+    accent-color: var(--accent);
+    margin: 0;
+  }
+
+  button {
+    padding: 0.4rem 0.7rem;
+    font: 500 0.8rem var(--font-mono);
+    color: var(--fg);
+    background: transparent;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  button:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem 0.9rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .legend label {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    cursor: pointer;
+  }
+
+  .legend .key {
+    margin-left: auto;
+  }
+
+  .vp :global(.line) {
+    display: inline-block;
+    width: 1rem;
+    height: 0;
+    margin-right: 0.3rem;
+    vertical-align: middle;
+    border-top: 2px solid currentColor;
+  }
+
+  .legend .line.pred {
+    border-top-style: dashed;
+    color: var(--muted);
+  }
+
+  .vp :global(.s1) { color: var(--s1); }
+  .vp :global(.s2) { color: var(--s2); }
+  .vp :global(.s3) { color: var(--s3); }
+  .vp :global(.s4) { color: var(--s4); }
+  .vp :global(.s5) { color: var(--s5); }
+  .vp :global(.s6) { color: var(--s6); }
+  .vp :global(.s7) { color: var(--s7); }
+  .vp :global(.s8) { color: var(--s8); }
+  .vp :global(.s9) { color: var(--s9); }
+
+  .panels {
+    display: grid;
+    gap: 0.5rem;
+  }
+
+  .panels svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+  }
+
+  .panels :global(.grid) {
+    stroke: var(--rule);
+    stroke-width: 1;
+  }
+
+  .panels :global(.grid.zero) {
+    stroke: var(--muted);
+    stroke-dasharray: 2 3;
+  }
+
+  .panels :global(.tick) {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    fill: var(--muted);
+  }
+
+  .panels :global(.tick.clip) {
+    fill: var(--fg);
+  }
+
+  .panels :global(.series) {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+  }
+
+  .panels :global(.series.pred) {
+    stroke-width: 1.5;
+    stroke-dasharray: 4 4;
+    opacity: 0.7;
+  }
+
+  .panels :global(path.s1) { stroke: var(--s1); }
+  .panels :global(path.s2) { stroke: var(--s2); }
+  .panels :global(path.s3) { stroke: var(--s3); }
+  .panels :global(path.s4) { stroke: var(--s4); }
+  .panels :global(path.s5) { stroke: var(--s5); }
+  .panels :global(path.s6) { stroke: var(--s6); }
+  .panels :global(path.s7) { stroke: var(--s7); }
+  .panels :global(path.s8) { stroke: var(--s8); }
+  .panels :global(path.s9) { stroke: var(--s9); }
+
+  .readout {
+    width: 100%;
+    margin-top: 0.6rem;
+    border-collapse: collapse;
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .readout th,
+  .readout :global(td) {
+    padding: 0.2rem 0.6rem 0.2rem 0;
+    text-align: left;
+    vertical-align: top;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .readout th {
+    font-weight: 500;
+    color: var(--muted);
+  }
+
+  .readout :global(td:first-child) {
+    white-space: nowrap;
+  }
+
+  .readout :global(tr td:not(:first-child)) {
+    color: var(--fg);
+  }
+
+  .readout :global(td .meta) {
+    display: block;
+    font-size: 0.7rem;
+  }
+
+  @media (max-width: 34rem) {
+    .readout {
+      font-size: 0.68rem;
+    }
+  }
+
+  .note {
+    margin-top: 0.6rem;
+    font-size: 0.72rem;
+    line-height: 1.5;
+  }
+
+  figcaption {
+    margin-top: 0.75rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+</style>

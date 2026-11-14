@@ -1,0 +1,113 @@
+---
+// Which activation and which hidden width each production model uses. The
+// ratio is intermediate_size / hidden_size from the config file; the "stated"
+// column is what the paper or code says. Sources are in the post's footnotes.
+interface Props {
+  caption?: string;
+}
+const { caption } = Astro.props;
+
+const rows = [
+  { model: 'GPT-2 (2019)', act: 'GELU (tanh)', gated: false, d: 768, h: 3072, stated: '4d' },
+  { model: 'GPT-3 (2020)', act: 'GELU', gated: false, d: 12288, h: 49152, stated: '4d' },
+  { model: 'PaLM 540B (2022)', act: 'SwiGLU', gated: true, d: 18432, h: 73728, stated: '4d, no 2/3' },
+  { model: 'LLaMA 7B (2023)', act: 'SwiGLU', gated: true, d: 4096, h: 11008, stated: '2/3·4d → 256' },
+  { model: 'Llama 2 70B (2023)', act: 'SwiGLU', gated: true, d: 8192, h: 28672, stated: '2/3·4d·1.3 → 4096' },
+  { model: 'Mistral 7B (2023)', act: 'SwiGLU (config)', gated: true, d: 4096, h: 14336, stated: 'config only' },
+  { model: 'Qwen 7B (2023)', act: 'SwiGLU', gated: true, d: 4096, h: 11008, stated: '8/3 d' },
+  { model: 'DeepSeek 7B (2024)', act: 'SwiGLU', gated: true, d: 4096, h: 11008, stated: '8/3 d' },
+  { model: 'OLMo 7B (2024)', act: 'SwiGLU', gated: true, d: 4096, h: 11008, stated: '8/3 d → 128' },
+  { model: 'Gemma 2 9B (2024)', act: 'GEGLU (tanh)', gated: true, d: 3584, h: 14336, stated: 'report: 28672' },
+  { model: 'Gemma 2 27B (2024)', act: 'GEGLU (tanh)', gated: true, d: 4608, h: 36864, stated: 'report: 73728' },
+  { model: 'Llama 3 8B (2024)', act: 'SwiGLU', gated: true, d: 4096, h: 14336, stated: '2/3·4d·1.3 → 1024' },
+  { model: 'Llama 3 405B (2024)', act: 'SwiGLU', gated: true, d: 16384, h: 53248, stated: 'paper' },
+  { model: 'Gemma 3 27B (2025)', act: 'GEGLU (tanh)', gated: true, d: 5376, h: 21504, stated: 'config' },
+  { model: 'gpt-oss-120b expert (2025)', act: 'clamped GEGLU', gated: true, d: 2880, h: 2880, stated: 'α = 1.702' },
+  { model: 'Gemma 4 31B (2026)', act: 'GEGLU (tanh)', gated: true, d: 5376, h: 21504, stated: 'config' },
+];
+const ratio = (r: (typeof rows)[number]) => (r.h / r.d).toFixed(r.h % r.d === 0 ? 0 : 2);
+const ffnShare = (r: (typeof rows)[number]) => {
+  const ffn = (r.gated ? 3 : 2) * r.d * r.h;
+  const attn = 4 * r.d * r.d;
+  return Math.round((100 * ffn) / (ffn + attn));
+};
+---
+
+<figure class="model-table">
+  <table>
+    <thead>
+      <tr>
+        <th>model</th>
+        <th>FFN</th>
+        <th class="num">d</th>
+        <th class="num">hidden</th>
+        <th class="num">hidden/d</th>
+        <th class="num">FFN share</th>
+        <th>width rule</th>
+      </tr>
+    </thead>
+    <tbody>
+      {
+        rows.map((r) => (
+          <tr>
+            <td>{r.model}</td>
+            <td>{r.act}</td>
+            <td class="num">{r.d.toLocaleString('en-US')}</td>
+            <td class="num">{r.h.toLocaleString('en-US')}</td>
+            <td class="num">{ratio(r)}</td>
+            <td class="num">{ffnShare(r)}%</td>
+            <td class="meta">{r.stated}</td>
+          </tr>
+        ))
+      }
+    </tbody>
+  </table>
+  {caption && <figcaption>{caption}</figcaption>}
+</figure>
+
+<style>
+  .model-table {
+    margin: 2.25rem 0;
+    font-family: var(--font-mono);
+    overflow-x: auto;
+  }
+
+  table {
+    border-collapse: collapse;
+    font-size: 0.7rem;
+    line-height: 1.35;
+    width: 100%;
+  }
+
+  th,
+  td {
+    padding: 0.3rem 0.7rem 0.3rem 0;
+    text-align: left;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+
+  th {
+    font-weight: 500;
+    color: var(--muted);
+  }
+
+  .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  td.meta {
+    white-space: normal;
+  }
+
+  td:first-child {
+    white-space: normal;
+  }
+
+  figcaption {
+    margin-top: 0.75rem;
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+</style>

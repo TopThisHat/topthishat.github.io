@@ -23,6 +23,7 @@
     "@resvg/resvg-js": "^2.6.2",
     "@shikijs/transformers": "^4.5.0",
     "astro": "^7.3.6",
+    "katex": "^0.16.25",
     "satori": "^0.35.1"
   },
   "allowScripts": {

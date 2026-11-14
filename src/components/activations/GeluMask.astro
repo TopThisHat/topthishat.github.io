@@ -1,0 +1,358 @@
+---
+// GELU as an expectation. Each input x is kept with probability p(x) and
+// zeroed otherwise; the mean of x·m over many draws is x·p(x). With p = Φ that
+// mean is GELU, with p = σ it is SiLU, with p = 1[x > 0] it is ReLU with no
+// randomness at all. The initial draw is made on the server.
+interface Props {
+  caption?: string;
+}
+const { caption } = Astro.props;
+
+const erf = (x: number) => {
+  const s = Math.sign(x);
+  x = Math.abs(x);
+  const t = 1 / (1 + 0.3275911 * x);
+  const y = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+  return s * y;
+};
+const P = {
+  phi: (x: number) => 0.5 * (1 + erf(x / Math.SQRT2)),
+  logistic: (x: number) => 1 / (1 + Math.exp(-x)),
+  step: (x: number) => (x > 0 ? 1 : 0),
+};
+type Dist = keyof typeof P;
+const DISTS: { key: Dist; name: string; mean: string; slot: number }[] = [
+  { key: 'phi', name: 'Φ(x), Gaussian CDF', mean: 'GELU', slot: 1 },
+  { key: 'logistic', name: 'σ(x), logistic', mean: 'SiLU', slot: 2 },
+  { key: 'step', name: '1[x > 0], step', mean: 'ReLU', slot: 3 },
+];
+
+const GRID = 61;
+const X0 = -3;
+const X1 = 3;
+const xs = Array.from({ length: GRID }, (_, i) => X0 + ((X1 - X0) * i) / (GRID - 1));
+
+let seed = 0x9e3779b9;
+const rnd = () => {
+  seed ^= seed << 13;
+  seed ^= seed >>> 17;
+  seed ^= seed << 5;
+  return (seed >>> 0) / 4294967296;
+};
+const N0 = 16;
+const sample = (d: Dist, n: number) => xs.map((x) => {
+  const p = P[d](x);
+  let kept = 0;
+  for (let i = 0; i < n; i++) if (rnd() < p) kept++;
+  return (x * kept) / n;
+});
+const initial = sample('phi', N0);
+const initialErr = Math.max(...xs.map((x, i) => Math.abs(initial[i] - x * P.phi(x))));
+
+const W = 640;
+const H = 300;
+const HS = 90; // strip height
+const L = 44;
+const R = 16;
+const T = 18;
+const B = 30;
+const Y0 = -0.6;
+const Y1 = 3;
+const px = (x: number) => L + ((x - X0) / (X1 - X0)) * (W - L - R);
+const py = (y: number) => T + ((Y1 - y) / (Y1 - Y0)) * (H - T - B);
+const ps = (p: number) => 10 + (1 - p) * (HS - 10 - 24);
+const NF = 241;
+const fine = Array.from({ length: NF }, (_, i) => X0 + ((X1 - X0) * i) / (NF - 1));
+const curve = (f: (x: number) => number, y: (v: number) => number) =>
+  fine.map((x, i) => `${i ? 'L' : 'M'}${px(x).toFixed(1)},${y(f(x)).toFixed(1)}`).join('');
+const uid = `gm-${Math.random().toString(36).slice(2, 8)}`;
+---
+
+<figure class="gm" data-gelu-mask>
+  <div class="controls">
+    <label class="slider">
+      <span class="meta">
+        draws per point N = <strong data-n-label>{N0}</strong>
+      </span>
+      <input type="range" min="0" max="12" step="1" value="4" data-n />
+    </label>
+    <div class="radios meta" role="radiogroup" aria-label="keep probability">
+      <span>keep probability p(x) =</span>
+      {
+        DISTS.map((d, i) => (
+          <label class={`s${d.slot}`}>
+            <input type="radio" name={uid} value={d.key} checked={i === 0} data-dist /> {d.name}
+          </label>
+        ))
+      }
+    </div>
+    <div class="row">
+      <button type="button" data-resample>resample</button>
+      <span class="meta" data-err>max |mean − exact| = {initialErr.toFixed(3)}</span>
+    </div>
+  </div>
+  <div class="chart">
+    <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Monte Carlo mean of a randomly masked input against the exact curve x times p of x" data-main>
+      {[0, 1, 2, 3].map((v) => <line x1={L} x2={W - R} y1={py(v)} y2={py(v)} class="grid" />)}
+      {[-3, -2, -1, 0, 1, 2, 3].map((v) => <line x1={px(v)} x2={px(v)} y1={T} y2={H - B} class="grid" />)}
+      <line x1={L} x2={W - R} y1={py(0)} y2={py(0)} class="axis" />
+      <line x1={px(0)} x2={px(0)} y1={T} y2={H - B} class="axis" />
+      {[0, 1, 2, 3].map((v) => <text x={L - 6} y={py(v) + 4} class="tick" text-anchor="end">{v}</text>)}
+      {[-3, -2, -1, 0, 1, 2, 3].map((v) => <text x={px(v)} y={H - B + 14} class="tick" text-anchor="middle">{v}</text>)}
+      <text x={L} y={T - 6} class="tick">mean of x·m, m ~ Bernoulli(p(x))</text>
+      {DISTS.map((d) => <path d={curve((x) => x * P[d.key](x), py)} class={`exact s${d.slot}`} data-exact={d.key} data-active={d.key === 'phi' ? '1' : '0'} />)}
+      <g data-dots>
+        {xs.map((x, i) => <circle cx={px(x)} cy={py(initial[i])} r="3" class="mc" />)}
+      </g>
+    </svg>
+    <svg viewBox={`0 0 ${W} ${HS}`} role="img" aria-label="The keep probability p of x" data-strip>
+      {[0, 0.5, 1].map((v) => <line x1={L} x2={W - R} y1={ps(v)} y2={ps(v)} class="grid" />)}
+      {[0, 1].map((v) => <text x={L - 6} y={ps(v) + 4} class="tick" text-anchor="end">{v}</text>)}
+      <line x1={px(0)} x2={px(0)} y1={ps(1)} y2={ps(0)} class="axis" />
+      <text x={L} y={HS - 4} class="tick">p(x), the probability the input is kept</text>
+      {DISTS.map((d) => <path d={curve(P[d.key], ps)} class={`exact s${d.slot}`} data-prob={d.key} data-active={d.key === 'phi' ? '1' : '0'} />)}
+    </svg>
+  </div>
+  <div class="legend meta">
+    {DISTS.map((d) => <span class={`s${d.slot}`}><i class="line" /> x·{d.name.split(',')[0]} = {d.mean}</span>)}
+    <span><i class="dotkey" /> Monte Carlo mean</span>
+  </div>
+  {caption && <figcaption>{caption}</figcaption>}
+</figure>
+
+<script>
+  const erf = (x: number) => {
+    const s = Math.sign(x);
+    x = Math.abs(x);
+    const t = 1 / (1 + 0.3275911 * x);
+    const y = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+    return s * y;
+  };
+  const P: Record<string, (x: number) => number> = {
+    phi: (x) => 0.5 * (1 + erf(x / Math.SQRT2)),
+    logistic: (x) => 1 / (1 + Math.exp(-x)),
+    step: (x) => (x > 0 ? 1 : 0),
+  };
+  const GRID = 61;
+  const X0 = -3;
+  const X1 = 3;
+  const xs = Array.from({ length: GRID }, (_, i) => X0 + ((X1 - X0) * i) / (GRID - 1));
+  const H = 300;
+  const T = 18;
+  const B = 30;
+  const Y0 = -0.6;
+  const Y1 = 3;
+  const py = (y: number) => T + ((Y1 - y) / (Y1 - Y0)) * (H - T - B);
+
+  for (const root of document.querySelectorAll<HTMLElement>('[data-gelu-mask]')) {
+    const nIn = root.querySelector<HTMLInputElement>('[data-n]')!;
+    const nLabel = root.querySelector<HTMLElement>('[data-n-label]')!;
+    const err = root.querySelector<HTMLElement>('[data-err]')!;
+    const dots = [...root.querySelectorAll<SVGCircleElement>('[data-dots] circle')];
+    const dists = [...root.querySelectorAll<HTMLInputElement>('[data-dist]')];
+    let seed = 0x9e3779b9;
+    const rnd = () => {
+      seed ^= seed << 13;
+      seed ^= seed >>> 17;
+      seed ^= seed << 5;
+      return (seed >>> 0) / 4294967296;
+    };
+
+    function draw() {
+      const n = 2 ** Number(nIn.value);
+      const d = dists.find((r) => r.checked)!.value;
+      nLabel.textContent = String(n);
+      let worst = 0;
+      xs.forEach((x, i) => {
+        const p = P[d](x);
+        let kept = 0;
+        for (let k = 0; k < n; k++) if (rnd() < p) kept++;
+        const m = (x * kept) / n;
+        dots[i].setAttribute('cy', String(py(Math.max(Y0, Math.min(Y1, m)))));
+        worst = Math.max(worst, Math.abs(m - x * p));
+      });
+      err.textContent = `max |mean − exact| = ${worst.toFixed(3)}${d === 'step' ? ' (no randomness: p is 0 or 1)' : `, about 1/√N = ${(1 / Math.sqrt(n)).toFixed(3)} scaled by x`}`;
+      for (const el of root.querySelectorAll<SVGPathElement>('[data-exact],[data-prob]')) {
+        el.dataset.active = (el.dataset.exact ?? el.dataset.prob) === d ? '1' : '0';
+      }
+    }
+    nIn.addEventListener('input', draw);
+    for (const r of dists) r.addEventListener('change', draw);
+    root.querySelector('[data-resample]')!.addEventListener('click', () => {
+      seed = (seed * 1664525 + 1013904223) >>> 0 || 1;
+      draw();
+    });
+  }
+</script>
+
+<style>
+  .gm {
+    margin: 2.25rem 0;
+    font-family: var(--font-mono);
+    --s1: #2a78d6;
+    --s2: #e87ba4;
+    --s3: #17703a;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .gm {
+      --s1: #3987e5;
+      --s2: #d55181;
+      --s3: #008300;
+    }
+  }
+
+  .controls {
+    display: grid;
+    gap: 0.6rem;
+    margin-bottom: 0.6rem;
+  }
+
+  .slider {
+    display: grid;
+    gap: 0.2rem;
+  }
+
+  .slider strong {
+    color: var(--fg);
+  }
+
+  input[type='range'] {
+    width: 100%;
+    max-width: 24rem;
+    accent-color: var(--accent);
+  }
+
+  .radios {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem 0.9rem;
+    align-items: center;
+  }
+
+  .radios label {
+    color: var(--fg);
+  }
+
+  .radios input {
+    accent-color: var(--accent);
+    margin: 0 0.25rem 0 0;
+  }
+
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    align-items: center;
+  }
+
+  button {
+    padding: 0.4rem 0.7rem;
+    font: 500 0.8rem var(--font-mono);
+    color: var(--fg);
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  button:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .chart {
+    display: grid;
+    gap: 0.4rem;
+  }
+
+  .chart svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+  }
+
+  .chart .grid {
+    stroke: var(--rule);
+    stroke-width: 1;
+  }
+
+  .chart .axis {
+    stroke: var(--muted);
+    stroke-width: 1;
+  }
+
+  .chart .tick {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    fill: var(--muted);
+  }
+
+  .chart .exact {
+    fill: none;
+    stroke-width: 2;
+    stroke-linejoin: round;
+    opacity: 0.25;
+  }
+
+  .chart .exact[data-active='1'] {
+    opacity: 1;
+  }
+
+  .chart .mc {
+    fill: var(--fg);
+    stroke: var(--surface);
+    stroke-width: 1.5;
+  }
+
+  .gm .s1 {
+    color: var(--s1);
+    stroke: var(--s1);
+  }
+
+  .gm .s2 {
+    color: var(--s2);
+    stroke: var(--s2);
+  }
+
+  .gm .s3 {
+    color: var(--s3);
+    stroke: var(--s3);
+  }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem 1rem;
+    margin-top: 0.5rem;
+    font-size: 0.78rem;
+  }
+
+  .legend .line {
+    display: inline-block;
+    width: 1rem;
+    height: 0;
+    margin-right: 0.35rem;
+    vertical-align: middle;
+    border-top: 2px solid currentColor;
+  }
+
+  .legend .dotkey {
+    display: inline-block;
+    width: 0.5rem;
+    height: 0.5rem;
+    margin-right: 0.35rem;
+    vertical-align: middle;
+    border-radius: 50%;
+    background: var(--fg);
+  }
+
+  figcaption {
+    margin-top: 0.75rem;
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+</style>

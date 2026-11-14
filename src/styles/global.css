@@ -446,3 +446,15 @@ pre {
   }
 }
 
+
+/* Math (KaTeX MathML output; no KaTeX stylesheet is loaded) */
+.prose .katex {
+  font-size: 1.02em;
+}
+
+.prose .katex:has(math[display="block"]) {
+  display: block;
+  margin: 1.25rem 0;
+  overflow-x: auto;
+  text-align: center;
+}
